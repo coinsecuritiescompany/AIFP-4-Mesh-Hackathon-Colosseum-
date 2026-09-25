@@ -1,0 +1,9 @@
+services:
+  aifp4-mesh:
+    build: .
+    ports:
+      - "4044:4044"
+    environment:
+      PORT: 4044
+      AIFP4_API_KEY: ${AIFP4_API_KEY:-sandbox-demo-key}
+      MESH_HMAC_SECRET: ${MESH_HMAC_SECRET:-sandbox-only-change-me}
