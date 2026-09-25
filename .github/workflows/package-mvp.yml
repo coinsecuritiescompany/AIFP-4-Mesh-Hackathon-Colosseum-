@@ -1,0 +1,20 @@
+name: package-mvp
+on:
+  push:
+    paths:
+      - ".github/workflows/package-mvp.yml"
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build public MVP archive
+        run: |
+          zip -qr AIFP4-Mesh-Colosseum-MVP.zip .             -x ".git/*" ".env" ".env.*" "*.key" "*.pem" "*.p12"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AIFP4-Mesh-Colosseum-MVP
+          path: AIFP4-Mesh-Colosseum-MVP.zip
+          if-no-files-found: error
