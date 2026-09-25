@@ -1,0 +1,22 @@
+{
+  "name": "@aifinpay/aifp4-mesh-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AIFP-4 Mesh MVP: local-first payment intents, policy routing, offline queueing, and Solana Devnet settlement proof.",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test tests/*.test.mjs",
+    "check": "node scripts/check-syntax.mjs",
+    "devnet:payment": "node scripts/devnet-payment.mjs",
+    "ci": "npm run check && npm test"
+  },
+  "dependencies": {
+    "@solana/kit": "8.3.0",
+    "@solana/kit-plugin-rpc": "0.19.0",
+    "@solana/kit-plugin-signer": "0.19.0",
+    "@solana-program/memo": "0.14.1",
+    "@solana-program/system": "0.14.1"
+  }
+}
