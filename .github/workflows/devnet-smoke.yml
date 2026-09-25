@@ -1,0 +1,19 @@
+name: solana-devnet-smoke
+on:
+  push:
+    paths:
+      - ".github/workflows/devnet-smoke.yml"
+permissions:
+  contents: read
+jobs:
+  payment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --ignore-scripts
+      - name: Execute AIFP-4 Mesh Devnet payment
+        run: npm run devnet:payment
