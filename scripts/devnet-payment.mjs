@@ -21,7 +21,7 @@ const intent = {
 const intentHash = createHash('sha256').update(JSON.stringify(intent)).digest('hex');
 
 console.log('Requesting Devnet SOL for ephemeral sandbox payer:', payer.address);
-await client.airdrop({ address: payer.address, amount: lamports(50_000_000n), commitment: 'confirmed' });
+await client.airdrop(payer.address, lamports(50_000_000n));
 
 const transfer = getTransferSolInstruction({
   source: client.payer,
