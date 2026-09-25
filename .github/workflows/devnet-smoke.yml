@@ -1,9 +1,6 @@
 name: solana-devnet-smoke
 on:
-  push:
-    paths:
-      - ".github/workflows/devnet-smoke.yml"
-      - "scripts/devnet-payment.mjs"
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
