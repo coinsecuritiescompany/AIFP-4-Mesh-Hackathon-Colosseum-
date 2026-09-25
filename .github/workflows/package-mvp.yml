@@ -3,6 +3,7 @@ on:
   push:
     paths:
       - ".github/workflows/package-mvp.yml"
+# Final public package includes migrated legacy reference material.
 permissions:
   contents: read
 jobs:
