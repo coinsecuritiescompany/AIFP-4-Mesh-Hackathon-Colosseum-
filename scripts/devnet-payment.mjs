@@ -1,11 +1,20 @@
-import { createClient, generateKeyPairSigner, lamports } from '@solana/kit';
+import { createClient, createKeyPairSignerFromBytes, generateKeyPairSigner, lamports } from '@solana/kit';
 import { solanaDevnetRpc } from '@solana/kit-plugin-rpc';
 import { signer } from '@solana/kit-plugin-signer';
 import { getTransferSolInstruction } from '@solana-program/system';
 import { getAddMemoInstruction } from '@solana-program/memo';
 import { createHash } from 'node:crypto';
 
-const payer = await generateKeyPairSigner();
+async function loadPayer() {
+  const encoded = process.env.SOLANA_PAYER_SECRET_JSON;
+  if (!encoded) return { payer: await generateKeyPairSigner(), ephemeral: true };
+
+  const bytes = new Uint8Array(JSON.parse(encoded));
+  if (bytes.length !== 64) throw new Error('SOLANA_PAYER_SECRET_JSON must contain a 64-byte Devnet keypair JSON array');
+  return { payer: await createKeyPairSignerFromBytes(bytes), ephemeral: false };
+}
+
+const { payer, ephemeral } = await loadPayer();
 const recipient = await generateKeyPairSigner();
 const client = createClient().use(signer(payer)).use(solanaDevnetRpc());
 
@@ -33,11 +42,15 @@ async function fundEphemeralPayer() {
     }
   }
   throw new Error(
-    `Devnet faucet unavailable after 3 attempts. The payment code is ready, but the public faucet did not fund the disposable payer. Retry later or run against a pre-funded Devnet payer. Cause: ${lastError?.message ?? lastError}`
+    `Devnet faucet unavailable after 3 attempts. Set SOLANA_PAYER_SECRET_JSON to a pre-funded Devnet-only 64-byte keypair JSON array, or retry later. Cause: ${lastError?.message ?? lastError}`
   );
 }
 
-await fundEphemeralPayer();
+if (ephemeral) {
+  await fundEphemeralPayer();
+} else {
+  console.log('Using pre-funded Devnet-only payer:', payer.address);
+}
 
 const transfer = getTransferSolInstruction({
   source: client.payer,
