@@ -20,8 +20,24 @@ const intent = {
 };
 const intentHash = createHash('sha256').update(JSON.stringify(intent)).digest('hex');
 
-console.log('Requesting Devnet SOL for ephemeral sandbox payer:', payer.address);
-await client.airdrop(payer.address, lamports(50_000_000n));
+async function fundEphemeralPayer() {
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      console.log(`Requesting Devnet SOL for ephemeral sandbox payer (attempt ${attempt}/3):`, payer.address);
+      await client.airdrop(payer.address, lamports(50_000_000n));
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
+    }
+  }
+  throw new Error(
+    `Devnet faucet unavailable after 3 attempts. The payment code is ready, but the public faucet did not fund the disposable payer. Retry later or run against a pre-funded Devnet payer. Cause: ${lastError?.message ?? lastError}`
+  );
+}
+
+await fundEphemeralPayer();
 
 const transfer = getTransferSolInstruction({
   source: client.payer,
