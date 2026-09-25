@@ -3,6 +3,7 @@ on:
   push:
     paths:
       - ".github/workflows/devnet-smoke.yml"
+      - "scripts/devnet-payment.mjs"
 permissions:
   contents: read
 jobs:
