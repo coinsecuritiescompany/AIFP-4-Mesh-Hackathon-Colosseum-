@@ -1,0 +1,76 @@
+openapi: 3.1.0
+info:
+  title: AIFP-4 Mesh Sandbox API
+  version: 0.1.0
+  description: Local-first payment intent, routing and sandbox settlement API for autonomous agents.
+servers:
+  - url: http://localhost:4044
+paths:
+  /health:
+    get:
+      responses:
+        '200': { description: Healthy }
+  /v1/routes:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      parameters:
+        - in: query
+          name: asset
+          schema: { type: string }
+      responses:
+        '200': { description: Eligible routes }
+  /v1/intents:
+    post:
+      security: [{ ApiKeyAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateIntent'
+      responses:
+        '201': { description: Payment intent created }
+  /v1/intents/{intentId}/execute:
+    post:
+      security: [{ ApiKeyAuth: [] }]
+      parameters:
+        - in: path
+          name: intentId
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Intent executed or queued }
+  /v1/intents/{intentId}:
+    get:
+      security: [{ ApiKeyAuth: [] }]
+      parameters:
+        - in: path
+          name: intentId
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Intent state }
+  /v1/mesh/reconcile:
+    post:
+      security: [{ ApiKeyAuth: [] }]
+      responses:
+        '200': { description: Queued intents reconciled }
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-aifp4-api-key
+  schemas:
+    CreateIntent:
+      type: object
+      additionalProperties: false
+      required: [idempotencyKey, agentId, beneficiary, amountMinor, asset, purpose]
+      properties:
+        idempotencyKey: { type: string, minLength: 1 }
+        agentId: { type: string, minLength: 1 }
+        beneficiary: { type: string, minLength: 1 }
+        amountMinor: { type: integer, minimum: 1 }
+        asset: { type: string, enum: [USDC, SOL, USD] }
+        purpose: { type: string, minLength: 1 }
+        expiresAt: { type: string, format: date-time }
