@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build public MVP archive
         run: |
-          zip -qr AIFP4-Mesh-Colosseum-MVP.zip .             -x ".git/*" ".env" ".env.*" "*.key" "*.pem" "*.p12"
+          zip -qr AIFP4-Mesh-Colosseum-MVP.zip .             -x ".git/*" ".env" ".env.local" ".env.production" "*.key" "*.pem" "*.p12"
       - uses: actions/upload-artifact@v4
         with:
           name: AIFP4-Mesh-Colosseum-MVP
