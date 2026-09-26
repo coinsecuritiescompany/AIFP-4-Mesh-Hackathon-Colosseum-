@@ -13,6 +13,7 @@ services:
       AIFP4_API_KEY: ${AIFP4_API_KEY:-sandbox-demo-key}
       MESH_HMAC_SECRET: ${MESH_HMAC_SECRET:-sandbox-only-change-me}
       AIFP4_DATA_FILE: /app/.data/mesh.json
+      AIFP4_BIND_HOST: ${AIFP4_BIND_HOST:-127.0.0.1}
       SOLANA_PAYER_SECRET_JSON: ${SOLANA_PAYER_SECRET_JSON:-}
     volumes:
       - mesh-data:/app/.data

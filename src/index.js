@@ -2,10 +2,10 @@ import { MeshService } from './service.js';
 import { createServer } from './server.js';
 import { IntentStore } from './store.js';
 import { SolanaDevnetAdapter } from './adapters/solana-devnet.js';
+import { validateRuntimeSecurity } from './runtime-security.js';
 
 const port = Number(process.env.PORT ?? 4044);
-const apiKey = process.env.AIFP4_API_KEY ?? 'sandbox-demo-key';
-const signingSecret = process.env.MESH_HMAC_SECRET ?? 'sandbox-only-change-me';
+const { apiKey, signingSecret } = validateRuntimeSecurity(process.env);
 
 const routes = [
   {

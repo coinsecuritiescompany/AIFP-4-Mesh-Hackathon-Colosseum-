@@ -5,6 +5,8 @@ import { IntentStore } from './store.js';
 import { MockRailAdapter } from './adapters/mock.js';
 import { address } from '@solana/kit';
 
+const HASHED_FIELDS = ['protocol', 'version', 'id', 'idempotencyKey', 'agentId', 'agentPassportId', 'sponsorId', 'beneficiary', 'amountMinor', 'asset', 'purpose', 'createdAt', 'expiresAt', 'policyId', 'nonce'];
+
 export class MeshService {
   constructor({ routes, policy = DEFAULT_POLICY, store = new IntentStore(), signingSecret = '' }) {
     this.routes = routes; this.store = store; this.signingSecret = signingSecret;
@@ -23,9 +25,11 @@ export class MeshService {
     return this.store.add('agents', { id: newId('agent'), name: input.name.trim(), passportId: newId('passport'), sponsorId: 'sponsor_demo', status: 'active', policyId: policy.id, createdAt: new Date().toISOString() });
   }
   createPolicy(input = {}) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new PolicyError('INVALID_POLICY', 'Policy must be an object');
     const result = { ...DEFAULT_POLICY, ...input, id: newId('policy'), version: '1' };
     for (const field of ['maxAmountMinor', 'dailyLimitMinor', 'maxTransactions']) if (!Number.isSafeInteger(result[field]) || result[field] <= 0) throw new PolicyError('INVALID_POLICY', `${field} must be positive`);
-    for (const field of ['allowedAssets', 'allowedRails', 'beneficiaryAllowlist', 'beneficiaryDenylist']) if (!Array.isArray(result[field]) || result[field].some(x => typeof x !== 'string')) throw new PolicyError('INVALID_POLICY', `${field} must be an array of strings`);
+    for (const field of ['allowedAssets', 'allowedRails', 'beneficiaryAllowlist', 'beneficiaryDenylist']) if (!Array.isArray(result[field]) || result[field].length > 100 || result[field].some(x => typeof x !== 'string' || x.length > 180)) throw new PolicyError('INVALID_POLICY', `${field} must be an array of strings`);
+    if (typeof result.offlineAllowed !== 'boolean' || typeof result.requirePurpose !== 'boolean' || (result.expiresAt !== undefined && (typeof result.expiresAt !== 'string' || !Number.isFinite(Date.parse(result.expiresAt))))) throw new PolicyError('INVALID_POLICY', 'Invalid policy flags or expiry');
     return this.store.add('policies', result);
   }
   assignPolicy(agentId, policyId) {
@@ -37,19 +41,20 @@ export class MeshService {
     const prior = this.store.all('intents').find(x => x.idempotencyKey === input.idempotencyKey && input.idempotencyKey);
     if (prior) {
       const fields = ['agentId', 'beneficiary', 'amountMinor', 'asset', 'purpose'];
-      if (fields.some(field => prior[field] !== input[field])) throw new PolicyError('IDEMPOTENCY_CONFLICT', 'This key belongs to a different payment');
+      if (fields.some(field => prior[field] !== input[field]) || (input.expiresAt !== undefined && prior.expiresAt !== input.expiresAt)) throw new PolicyError('IDEMPOTENCY_CONFLICT', 'This key belongs to a different payment');
       return prior;
     }
     const agent = this.store.find('agents', input.agentId);
     if (!agent || agent.status !== 'active') throw new PolicyError('INVALID_AGENT', 'Select an active agent');
     if (typeof input.idempotencyKey !== 'string' || input.idempotencyKey.length < 3 || input.idempotencyKey.length > 128 || typeof input.beneficiary !== 'string' || !input.beneficiary.trim() || input.beneficiary.length > 180) throw new PolicyError('INVALID_INPUT', 'A unique key and beneficiary are required');
     if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor <= 0) throw new PolicyError('INVALID_AMOUNT', 'Amount must be a positive integer');
+    if (typeof input.purpose !== 'string' || input.purpose.length > 180 || typeof input.asset !== 'string') throw new PolicyError('INVALID_INPUT', 'Asset and purpose must be strings');
     if (input.asset === 'SOL') {
       try { address(input.beneficiary); } catch { throw new PolicyError('INVALID_BENEFICIARY', 'Enter a valid Solana Devnet recipient address'); }
     }
     const now = new Date().toISOString();
     const expiresAt = input.expiresAt ?? new Date(Date.now() + 30 * 60000).toISOString();
-    if (!Number.isFinite(Date.parse(expiresAt)) || Date.parse(expiresAt) <= Date.now()) throw new PolicyError('INVALID_EXPIRY', 'Expiry must be in the future');
+    if (typeof expiresAt !== 'string' || !Number.isFinite(Date.parse(expiresAt)) || Date.parse(expiresAt) <= Date.now() || Date.parse(expiresAt) > Date.now() + 86400000) throw new PolicyError('INVALID_EXPIRY', 'Expiry must be within 24 hours');
     const policy = this.store.find('policies', agent.policyId);
     const base = { protocol: 'AIFP-4-Mesh', version: '0.2.0', id: newId('pi'), idempotencyKey: input.idempotencyKey, agentId: agent.id, agentPassportId: agent.passportId, sponsorId: agent.sponsorId, beneficiary: input.beneficiary.trim(), amountMinor: input.amountMinor, asset: input.asset, purpose: input.purpose, createdAt: now, expiresAt, policyId: policy.id, nonce: newId('nonce') };
     const policyDecision = evaluatePolicy(base, policy, this.store.all('transactions'));
@@ -73,8 +78,21 @@ export class MeshService {
     if (intent.state === 'executing') throw new PolicyError('EXECUTION_UNCERTAIN', 'Execution must be checked manually before retry');
     if (intent.state === 'expired') return intent;
     if (Date.parse(intent.expiresAt) <= Date.now()) { intent.state = 'expired'; return this.store.save(intent); }
-    const policy = this.store.find('policies', intent.policyId);
-    const routeDecision = chooseRoute(intent, this.routes, policy.allowedRails); intent.routeDecision = routeDecision;
+    const canonicalPayload = Object.fromEntries(HASHED_FIELDS.map(field => [field, intent[field]]));
+    if (sha256(canonicalPayload) !== intent.intentHash || (this.signingSecret && hmacSha256({ intentHash: intent.intentHash, agentId: intent.agentId }, this.signingSecret) !== intent.signature)) throw new PolicyError('INTENT_INTEGRITY_FAILED', 'Stored intent failed its hash or signature check');
+    const agent = this.store.find('agents', intent.agentId);
+    if (!agent || agent.status !== 'active') throw new PolicyError('INVALID_AGENT', 'Agent is no longer active');
+    const policy = this.store.find('policies', agent.policyId);
+    const originalPolicy = this.store.find('policies', intent.policyId);
+    if (!policy || !originalPolicy) throw new PolicyError('INVALID_POLICY', 'Policy is unavailable');
+    // Recheck at settlement: several previously authorized intents may share a daily limit.
+    // Reserve executing intents before awaiting a rail, so concurrent requests cannot overspend.
+    const reserved = this.store.all('intents').filter(x => x.id !== id && x.agentId === intent.agentId && x.state === 'executing' && x.createdAt.slice(0, 10) === new Date().toISOString().slice(0, 10)).map(x => ({ agentId: x.agentId, amountMinor: x.amountMinor, createdAt: x.createdAt }));
+    const usage = [...this.store.all('transactions').filter(x => x.state === 'settled'), ...reserved];
+    evaluatePolicy(intent, originalPolicy, usage);
+    evaluatePolicy(intent, policy, usage);
+    const allowedRails = policy.allowedRails.filter(rail => originalPolicy.allowedRails.includes(rail));
+    const routeDecision = chooseRoute(intent, this.routes, allowedRails); intent.routeDecision = routeDecision;
     if (routeDecision.mode !== 'online') {
       if (!policy.offlineAllowed) throw new PolicyError('OFFLINE_BLOCKED', 'Policy does not permit offline queueing');
       intent.state = 'queued'; return this.store.save(intent);

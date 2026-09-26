@@ -8,4 +8,5 @@ node_modules/
 *.p12
 *.log
 coverage/
+.data/
 .DS_Store
