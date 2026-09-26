@@ -35,7 +35,7 @@ From a clean clone with Docker Engine and Compose installed, start the sandbox A
 docker compose up --build -d
 ```
 
-Open **http://127.0.0.1:4044/** for the UI, or check `curl http://127.0.0.1:4044/health`. To stop it, run `docker compose down`. The named Docker volume retains sandbox payment history; `docker compose down -v` removes that volume. The API listens on localhost by default. For a different host port or sandbox API key, set `AIFP4_PORT`, `AIFP4_BIND_HOST` or `AIFP4_API_KEY` in an untracked `.env` file before starting Compose. The default API key is for local demos only. Enter the configured API key in the UI if you changed the default. The key is stored only in the browser tab. Mock USDC payment and offline reconciliation work inside Compose; the Solana Devnet transaction proof remains a separate script and is not executed by the web API.
+Open **http://127.0.0.1:4044/** for the UI, or check `curl http://127.0.0.1:4044/health`. To stop it, run `docker compose down`. The named Docker volume retains sandbox payment history; `docker compose down -v` removes that volume. The API listens on localhost by default. For a different host port or sandbox API key, set `AIFP4_PORT`, `AIFP4_BIND_HOST` or `AIFP4_API_KEY` in an untracked `.env` file before starting Compose. The default API key is for local demos only. Enter the configured API key in the UI if you changed the default. The key is stored only in the browser tab. Mock USDC payment and offline reconciliation work inside Compose; a pre-funded disposable Devnet payer can enable real SOL payments from the UI. Without one, SOL intents stay queued. The standalone Devnet proof script remains available.
 
 Run without Docker:
 
@@ -72,6 +72,10 @@ curl -s -X POST http://127.0.0.1:4044/v1/intents/INTENT_ID/execute \
 Open the dashboard → create a Research Agent or use the preloaded one → create a USDC intent → inspect policy and route scores → execute → inspect the receipt. For offline mode, turn off the mock rail under **Mesh router**, create another USDC intent, restore the rail and reconcile. The backend persists state in a Docker volume.
 
 ## Real sandbox payment on Solana Devnet
+
+To enable the optional SOL route in Compose, put a **Devnet-only**, pre-funded 64-byte keypair JSON array in `SOLANA_PAYER_SECRET_JSON` in your local untracked `.env`. Recreate the container with `docker compose up --build -d`. Select SOL in the UI, enter a Devnet recipient address and an amount in **lamports** (1,000,000 lamports = 0.001 SOL). The backend sends SOL and `AIFP4:<intentHash>` in the same transaction and creates a receipt only after Devnet confirmation. If confirmation is uncertain, the intent stays in `executing` and must be inspected before retrying. No mainnet mode is supported.
+
+The standalone proof script is still available:
 
 ```bash
 npm run devnet:payment

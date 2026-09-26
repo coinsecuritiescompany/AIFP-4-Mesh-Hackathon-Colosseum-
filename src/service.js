@@ -3,6 +3,7 @@ import { chooseRoute } from './mesh-router.js';
 import { DEFAULT_POLICY, evaluatePolicy, PolicyError } from './policy.js';
 import { IntentStore } from './store.js';
 import { MockRailAdapter } from './adapters/mock.js';
+import { address } from '@solana/kit';
 
 export class MeshService {
   constructor({ routes, policy = DEFAULT_POLICY, store = new IntentStore(), signingSecret = '' }) {
@@ -43,6 +44,9 @@ export class MeshService {
     if (!agent || agent.status !== 'active') throw new PolicyError('INVALID_AGENT', 'Select an active agent');
     if (typeof input.idempotencyKey !== 'string' || input.idempotencyKey.length < 3 || input.idempotencyKey.length > 128 || typeof input.beneficiary !== 'string' || !input.beneficiary.trim() || input.beneficiary.length > 180) throw new PolicyError('INVALID_INPUT', 'A unique key and beneficiary are required');
     if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor <= 0) throw new PolicyError('INVALID_AMOUNT', 'Amount must be a positive integer');
+    if (input.asset === 'SOL') {
+      try { address(input.beneficiary); } catch { throw new PolicyError('INVALID_BENEFICIARY', 'Enter a valid Solana Devnet recipient address'); }
+    }
     const now = new Date().toISOString();
     const expiresAt = input.expiresAt ?? new Date(Date.now() + 30 * 60000).toISOString();
     if (!Number.isFinite(Date.parse(expiresAt)) || Date.parse(expiresAt) <= Date.now()) throw new PolicyError('INVALID_EXPIRY', 'Expiry must be in the future');
@@ -87,7 +91,7 @@ export class MeshService {
       this.store.add('transactions', { id: newId('txn'), intentId: intent.id, agentId: intent.agentId, beneficiary: intent.beneficiary, amountMinor: intent.amountMinor, asset: intent.asset, rail: execution.rail, state: intent.state, reference: execution.reference, createdAt: core.issuedAt });
       return this.store.save(intent);
     } catch (error) {
-      intent.state = 'failed'; intent.failure = 'Rail execution failed'; this.store.save(intent); throw error;
+      intent.failure = 'Execution outcome uncertain; inspect the rail before retrying'; this.store.save(intent); throw error;
     }
   }
   async reconcileQueued() {
