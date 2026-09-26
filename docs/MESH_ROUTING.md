@@ -1,0 +1,7 @@
+# Routing
+
+Three decisions are separate: settlement capability (`USDC`/`SOL`), node path, then the transport on each edge. The origin learns signed, expiring node advertisements through direct peers. A node advertises only locally reachable direct links and its configured, online rail adapters. Peers gossip advertisements with monotonic per-node sequence numbers. Link reachability is probed by real signed HELLO exchanges every 2 seconds in Docker; failed links are withdrawn on the next advertisement. Advertisements expire after 9 seconds.
+
+The planner runs Dijkstra on directed edges. Edge cost = configured link cost + 20 × recent errors + 100 × (1 − reliability). Destination adds advertised fee basis points; equal scores break by node ID. Current software adapter status determines whether a local edge exists. The default topology gives A–B TCP (10), B–C libp2p (10), A–B libp2p backup (35), A–D libp2p (30), D–C TCP (20). The path is a result of the graph, not a literal path in payment code.
+
+On a failed next hop the node excludes that peer and replans for the same intent. A duplicate reaching C returns the stored receipt. The routing table is eventually consistent; a relay can learn a route before another peer, so a failure may cause a short retry/queue interval. Cost and latency estimates are not benchmarks or guaranteed fees. The rail's own scoring in `src/mesh-router.js` is still used at the settlement node.

@@ -1,28 +1,81 @@
+x-mesh-base: &mesh-base
+  build: .
+  command: ["node", "src/mesh/start.js"]
+  init: true
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4044/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+    interval: 10s
+    timeout: 5s
+    start_period: 20s
+    retries: 5
+x-mesh-env: &mesh-env
+  PORT: "4044"
+  NODE_ENV: production
+  AIFP4_API_KEY: ${AIFP4_API_KEY:-sandbox-demo-key}
+  MESH_HMAC_SECRET: ${MESH_HMAC_SECRET:-sandbox-only-change-me}
+  AIFP4_BIND_HOST: ${AIFP4_BIND_HOST:-127.0.0.1}
+
 services:
-  aifp4-mesh:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    init: true
-    restart: unless-stopped
-    ports:
-      - "${AIFP4_BIND_HOST:-127.0.0.1}:${AIFP4_PORT:-4044}:4044"
+  mesh-node-a:
+    <<: *mesh-base
     environment:
-      PORT: "4044"
-      NODE_ENV: production
-      AIFP4_API_KEY: ${AIFP4_API_KEY:-sandbox-demo-key}
-      MESH_HMAC_SECRET: ${MESH_HMAC_SECRET:-sandbox-only-change-me}
-      AIFP4_DATA_FILE: /app/.data/mesh.json
-      AIFP4_BIND_HOST: ${AIFP4_BIND_HOST:-127.0.0.1}
+      <<: *mesh-env
+      MESH_NODE_ID: node-a
+      MESH_DATA_DIR: /app/.data
+      MESH_PEERS: '[{"id":"node-b","tcp":{"host":"mesh-node-b","port":4100},"p2p":"/dns4/mesh-node-b/tcp/4200","cost":{"tcp":10,"libp2p":35}},{"id":"node-d","p2p":"/dns4/mesh-node-d/tcp/4200","cost":{"libp2p":30}},{"id":"bootstrap","tcp":{"host":"bootstrap","port":4100},"cost":{"tcp":500}}]'
+    volumes: [mesh-node-a-data:/app/.data]
+  mesh-node-b:
+    <<: *mesh-base
+    environment:
+      <<: *mesh-env
+      MESH_NODE_ID: node-b
+      MESH_DATA_DIR: /app/.data
+      MESH_PEERS: '[{"id":"node-a","tcp":{"host":"mesh-node-a","port":4100},"p2p":"/dns4/mesh-node-a/tcp/4200","cost":{"tcp":10,"libp2p":35}},{"id":"node-c","p2p":"/dns4/mesh-node-c/tcp/4200","cost":{"libp2p":10}}]'
+    volumes: [mesh-node-b-data:/app/.data]
+  mesh-node-c:
+    <<: *mesh-base
+    environment:
+      <<: *mesh-env
+      MESH_NODE_ID: node-c
+      MESH_DATA_DIR: /app/.data
+      MESH_SETTLE_MOCK: "true"
       SOLANA_PAYER_SECRET_JSON: ${SOLANA_PAYER_SECRET_JSON:-}
+      MESH_PEERS: '[{"id":"node-b","p2p":"/dns4/mesh-node-b/tcp/4200","cost":{"libp2p":10}},{"id":"node-d","tcp":{"host":"mesh-node-d","port":4100},"cost":{"tcp":20}}]'
+    volumes: [mesh-node-c-data:/app/.data]
+  mesh-node-d:
+    <<: *mesh-base
+    environment:
+      <<: *mesh-env
+      MESH_NODE_ID: node-d
+      MESH_DATA_DIR: /app/.data
+      MESH_PEERS: '[{"id":"node-a","p2p":"/dns4/mesh-node-a/tcp/4200","cost":{"libp2p":30}},{"id":"node-c","tcp":{"host":"mesh-node-c","port":4100},"cost":{"tcp":20}},{"id":"bootstrap","tcp":{"host":"bootstrap","port":4100},"cost":{"tcp":500}}]'
+    volumes: [mesh-node-d-data:/app/.data]
+  bootstrap:
+    <<: *mesh-base
+    environment:
+      <<: *mesh-env
+      MESH_NODE_ID: bootstrap
+      MESH_DATA_DIR: /app/.data
+      MESH_PEERS: '[{"id":"node-a","tcp":{"host":"mesh-node-a","port":4100},"cost":{"tcp":500}},{"id":"node-d","tcp":{"host":"mesh-node-d","port":4100},"cost":{"tcp":500}}]'
+    volumes: [mesh-bootstrap-data:/app/.data]
+  dashboard:
+    image: nginx:1.27-alpine
+    ports: ["${AIFP4_BIND_HOST:-127.0.0.1}:${AIFP4_PORT:-4044}:80"]
     volumes:
-      - mesh-data:/app/.data
+      - ./ops/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      mesh-node-a:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4044/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
-      interval: 20s
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/health"]
+      interval: 10s
       timeout: 5s
-      start_period: 10s
-      retries: 3
+      retries: 5
 
 volumes:
-  mesh-data:
+  mesh-node-a-data:
+  mesh-node-b-data:
+  mesh-node-c-data:
+  mesh-node-d-data:
+  mesh-bootstrap-data:

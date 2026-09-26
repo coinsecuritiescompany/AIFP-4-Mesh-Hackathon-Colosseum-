@@ -1,0 +1,7 @@
+# Disruption-tolerant behavior
+
+The origin writes the intent to its own payment store before forwarding. Without a path, it records `queued_for_mesh`. A periodic tick exchanges advertisements and retries queued intents when the graph changes. Expiry is checked before dispatch and at the receiving node. The queue survives process/container restart in a per-node Docker volume. Message replay IDs, advertisements, node keys and signed receipts are also persisted locally.
+
+This borrows store-and-forward, lifetime and convergence-adapter ideas from BPv7. It is **not a BPv7 bundle agent**: it does not emit RFC 9171 primary/canonical blocks, use BP endpoint IDs, implement custody/administrative records, BPSec, or interoperate with TCPCLv4. Forwarding currently requires a contemporaneous next-hop response; a relay does not persist an independently carried bundle. The origin owns the durable queue. A full DTN gateway needs per-relay durable bundles, acknowledgment/retransmission across asynchronous contacts, fragmentation/reassembly with integrity, BPv7 serialization and interoperability tests.
+
+If C's settlement outcome is unknown, C leaves the intent `executing`; the origin must not blindly retry a different rail. A lost receipt can be recovered through a repeated intent because C returns its persistent settled receipt, but automatic uncertainty resolution against Solana RPC remains future work.

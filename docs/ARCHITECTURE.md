@@ -1,22 +1,22 @@
-# AIFP-4 Mesh MVP Architecture
+# Architecture
 
-## Objective
+Each Compose Mesh service is an independent Node.js process with separate Ed25519 and libp2p identities, payment JSON store, signed advertisement registry, replay store and events. Node A serves the dashboard API through an Nginx proxy; C alone has the default mock settlement adapter and is the only node that can receive an optional Devnet payer. Bootstrap is a high-cost relay, not a centralized payment coordinator.
 
-AIFP-4 Mesh is a local-first payment orchestration layer for autonomous agents. An agent creates a deterministic payment intent, the policy engine checks delegated authority, the mesh router selects an eligible rail, and execution returns a verifiable receipt.
+```mermaid
+flowchart TD
+  Agent["AI agent / Dashboard"] --> Pay["Intent + policy"]
+  Pay --> Identity["Ed25519 origin signature"]
+  Identity --> DTN["Persistent queue + expiry"]
+  DTN --> Router["Graph router: node + link"]
+  Router --> Manager["Transport adapters"]
+  Manager --> TCP["TCP + CBOR"]
+  Manager --> P2P["libp2p + Noise/Yamux + CBOR"]
+  TCP --> Peer["Independent peer process"]
+  P2P --> Peer
+  Peer --> Rail["Mock USDC / optional Solana Devnet"]
+  Rail --> Receipt["Signed settlement receipt"]
+```
 
-## MVP components
+The route planner sees signed capability and link advertisements. It chooses a settlement node with the requested asset, then a weighted directed path whose edges specify the transport. Each hop checks the previous hop signature; every relay also checks the unchanged origin intent hash, signature, policy snapshot and expiry. C executes with the existing rail adapter. The signed receipt travels back over the request/response chain and is verified and persisted by A. Lost responses can be retried through another route; C's persistent intent and receipt records prevent another settlement. An uncertain rail outcome stays locked.
 
-1. **Intent envelope** — canonical payload + SHA-256 hash + optional HMAC integrity tag.
-2. **Policy engine** — spend caps, asset restrictions, beneficiary controls, purpose requirement.
-3. **Mesh router** — ranks eligible routes by availability, fee and latency; can queue when connectivity is unavailable.
-4. **Rail adapters** — deterministic mock adapter for CI and a Solana Devnet demo for real sandbox settlement.
-5. **Receipt layer** — binds intent hash, execution reference, fee, rail, network and settlement timestamp.
-6. **Offline reconciliation** — queued intents are re-ranked and executed after an eligible route becomes reachable.
-
-## Trust boundary
-
-The protocol does not store production banking credentials or custody production funds. Sandbox secrets stay outside git. Production signing should move to KMS/HSM-backed keys and asymmetric signatures.
-
-## Solana proof
-
-The Devnet demo sends SOL and a Memo instruction in one transaction. The memo contains `AIFP4:<intentHash>`, which creates a public, inspectable binding between the off-chain intent and the on-chain settlement proof.
+The implementation is a single-host Docker network demo, with loopback process tests. It does not require Internet for the mock rail. Solana Devnet requires connectivity to the public RPC. The storage is per node, never a shared volume. See [routing](MESH_ROUTING.md), [failure recovery](FAILURE_RECOVERY.md) and [threat model](THREAT_MODEL.md).

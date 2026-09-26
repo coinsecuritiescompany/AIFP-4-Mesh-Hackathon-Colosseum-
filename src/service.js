@@ -8,8 +8,8 @@ import { address } from '@solana/kit';
 const HASHED_FIELDS = ['protocol', 'version', 'id', 'idempotencyKey', 'agentId', 'agentPassportId', 'sponsorId', 'beneficiary', 'amountMinor', 'asset', 'purpose', 'createdAt', 'expiresAt', 'policyId', 'nonce'];
 
 export class MeshService {
-  constructor({ routes, policy = DEFAULT_POLICY, store = new IntentStore(), signingSecret = '' }) {
-    this.routes = routes; this.store = store; this.signingSecret = signingSecret;
+  constructor({ routes, policy = DEFAULT_POLICY, store = new IntentStore(), signingSecret = '', meshMode = false }) {
+    this.routes = routes; this.store = store; this.signingSecret = signingSecret; this.meshMode = meshMode;
     this.adapters = new Map([['mock', new MockRailAdapter()]]); this.inFlight = new Map();
     if (!store.all('agents').length) {
       store.add('policies', { ...policy, id: 'policy_demo', version: '1' });
@@ -60,9 +60,9 @@ export class MeshService {
     const policyDecision = evaluatePolicy(base, policy, this.store.all('transactions'));
     const routeDecision = chooseRoute(base, this.routes, policy.allowedRails);
     if (routeDecision.mode === 'queued' && !policy.offlineAllowed) throw new PolicyError('OFFLINE_BLOCKED', 'Policy does not permit offline queueing');
-    if (routeDecision.mode === 'unavailable') throw new PolicyError('ROUTE_UNAVAILABLE', 'No eligible route');
+    if (routeDecision.mode === 'unavailable' && !this.meshMode) throw new PolicyError('ROUTE_UNAVAILABLE', 'No eligible route');
     const intentHash = sha256(base);
-    const intent = { ...base, intentHash, signature: hmacSha256({ intentHash, agentId: agent.id }, this.signingSecret), policyDecision, routeDecision, state: routeDecision.mode === 'queued' ? 'queued' : 'authorized', receipt: null };
+    const intent = { ...base, intentHash, signature: hmacSha256({ intentHash, agentId: agent.id }, this.signingSecret), policyDecision, routeDecision, state: routeDecision.mode === 'unavailable' && this.meshMode ? 'queued_for_mesh' : routeDecision.mode === 'queued' ? 'queued' : 'authorized', receipt: null };
     this.store.add('events', { id: newId('evt'), intentId: intent.id, type: `intent.${intent.state}`, createdAt: now });
     return this.store.create(intent).intent;
   }
@@ -117,5 +117,5 @@ export class MeshService {
     for (const intent of this.store.queued()) if (Date.parse(intent.expiresAt) <= Date.now()) { intent.state = 'expired'; this.store.save(intent); } else if (chooseRoute(intent, this.routes, this.store.find('policies', intent.policyId).allowedRails).mode === 'online') results.push(await this.execute(intent.id));
     return results;
   }
-  stats() { const intents = this.store.all('intents'); return { settledPayments: intents.filter(x => x.state === 'settled').length, queuedPayments: intents.filter(x => x.state === 'queued').length, failedPayments: intents.filter(x => ['failed', 'expired'].includes(x.state)).length, activeAgents: this.store.all('agents').filter(x => x.status === 'active').length, availableRails: this.routes.filter(x => x.online).length, sandboxVolumeMinor: this.store.all('transactions').filter(x => x.state === 'settled' && x.asset === 'USDC').reduce((n, x) => n + x.amountMinor, 0) }; }
+  stats() { const intents = this.store.all('intents'); return { settledPayments: intents.filter(x => x.state === 'settled').length, queuedPayments: intents.filter(x => ['queued', 'queued_for_mesh'].includes(x.state)).length, failedPayments: intents.filter(x => ['failed', 'expired'].includes(x.state)).length, activeAgents: this.store.all('agents').filter(x => x.status === 'active').length, availableRails: this.routes.filter(x => x.online).length, sandboxVolumeMinor: this.store.all('transactions').filter(x => x.state === 'settled' && x.asset === 'USDC').reduce((n, x) => n + x.amountMinor, 0) }; }
 }

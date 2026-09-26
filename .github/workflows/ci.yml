@@ -25,5 +25,6 @@ jobs:
           curl --fail --silent http://127.0.0.1:4044/health
           curl --fail --silent http://127.0.0.1:4044/ | grep -q 'AIFP-4 Mesh'
           curl --fail --silent http://127.0.0.1:4044/styles.css | grep -q 'color-scheme'
+          node scripts/compose-smoke.mjs
       - if: always()
         run: docker compose down
