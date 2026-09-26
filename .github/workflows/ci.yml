@@ -18,3 +18,11 @@ jobs:
       - run: npm run ci
       - run: docker compose config --quiet
       - run: docker compose build
+      - name: Smoke test one-command stack
+        run: |
+          docker compose up -d --wait
+          curl --fail --silent http://127.0.0.1:4044/health
+          curl --fail --silent http://127.0.0.1:4044/ | grep -q 'AIFP-4 Mesh'
+          curl --fail --silent http://127.0.0.1:4044/styles.css | grep -q 'color-scheme'
+      - if: always()
+        run: docker compose down
