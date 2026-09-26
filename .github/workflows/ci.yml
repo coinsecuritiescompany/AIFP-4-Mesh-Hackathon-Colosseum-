@@ -15,6 +15,7 @@ jobs:
         with:
           node-version: 22
       - run: npm ci --ignore-scripts
+      - run: npm audit --omit=dev --audit-level=high
       - run: npm run ci
       - run: docker compose config --quiet
       - run: docker compose build

@@ -1,7 +1,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 
 const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
 function send(res, status, payload, type = 'application/json; charset=utf-8') {
@@ -11,10 +11,20 @@ function send(res, status, payload, type = 'application/json; charset=utf-8') {
 async function readJson(req) {
   const chunks = []; let size = 0;
   for await (const chunk of req) { size += chunk.length; if (size > 65536) throw Object.assign(new Error('Request body too large'), { code: 'PAYLOAD_TOO_LARGE' }); chunks.push(chunk); }
-  try { return chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}; } catch { throw Object.assign(new Error('Invalid JSON'), { code: 'INVALID_JSON' }); }
+  try {
+    const data = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {};
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Expected an object');
+    return data;
+  } catch { throw Object.assign(new Error('Invalid JSON object'), { code: 'INVALID_JSON' }); }
+}
+function authorized(candidate, expected) {
+  if (typeof candidate !== 'string' || !expected) return false;
+  const a = Buffer.from(candidate), b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 export function createServer({ service, apiKey }) {
   const root = path.resolve('public');
+  const attempts = new Map();
   return http.createServer(async (req, res) => {
     const requestId = randomUUID();
     try {
@@ -24,7 +34,17 @@ export function createServer({ service, apiKey }) {
         return send(res, 200, fs.readFileSync(file, 'utf8'), types[path.extname(file)]);
       }
       if (p === '/health' && method === 'GET') return send(res, 200, { ok: true, service: 'aifp4-mesh', version: '0.2.0' });
-      if (!apiKey || req.headers['x-aifp4-api-key'] !== apiKey) return send(res, 401, { error: 'UNAUTHORIZED', requestId });
+      const now = Date.now(), ip = req.socket.remoteAddress ?? 'unknown';
+      if (attempts.size > 10000) {
+        for (const [key, entry] of attempts) if (entry.until <= now) attempts.delete(key);
+        while (attempts.size > 10000) attempts.delete(attempts.keys().next().value);
+      }
+      const bucket = attempts.get(ip);
+      const current = bucket && bucket.until > now ? bucket : { count: 0, until: now + 60000 };
+      current.count++;
+      attempts.set(ip, current);
+      if (current.count > 300) { res.setHeader('retry-after', String(Math.ceil((current.until - now) / 1000))); return send(res, 429, { error: 'RATE_LIMITED', requestId }); }
+      if (!authorized(req.headers['x-aifp4-api-key'], apiKey)) return send(res, 401, { error: 'UNAUTHORIZED', requestId });
       if (method === 'GET' && p === '/v1/stats') return send(res, 200, service.stats());
       if (method === 'GET' && p === '/v1/routes') return send(res, 200, { routes: service.listRoutes({ asset: url.searchParams.get('asset') ?? undefined }) });
       if (method === 'POST' && p === '/v1/mesh/network') { const data = await readJson(req); if (typeof data.online !== 'boolean') return send(res, 422, { error: 'INVALID_INPUT', requestId }); return send(res, 200, { routes: service.setMockOnline(data.online) }); }
@@ -43,7 +63,7 @@ export function createServer({ service, apiKey }) {
       if (execute && method === 'POST') return send(res, 200, await service.execute(execute[1]));
       return send(res, 404, { error: 'NOT_FOUND', requestId });
     } catch (error) {
-      const status = error.code === 'PAYLOAD_TOO_LARGE' ? 413 : error.code === 'INTENT_NOT_FOUND' ? 404 : error.name === 'PolicyError' || error.code === 'INVALID_JSON' ? 422 : 500;
+      const status = error.code === 'PAYLOAD_TOO_LARGE' ? 413 : error.code === 'INTENT_NOT_FOUND' ? 404 : ['IDEMPOTENCY_CONFLICT', 'EXECUTION_UNCERTAIN', 'DAILY_LIMIT_EXCEEDED', 'TRANSACTION_COUNT_EXCEEDED'].includes(error.code) ? 409 : error.name === 'PolicyError' || error.code === 'INVALID_JSON' ? 422 : 500;
       return send(res, status, { error: error.code ?? 'INTERNAL_ERROR', message: status === 500 ? 'Internal error' : error.message, requestId });
     }
   });

@@ -73,7 +73,7 @@ Open the dashboard → create a Research Agent or use the preloaded one → crea
 
 ## Real sandbox payment on Solana Devnet
 
-To enable the optional SOL route in Compose, put a **Devnet-only**, pre-funded 64-byte keypair JSON array in `SOLANA_PAYER_SECRET_JSON` in your local untracked `.env`. Recreate the container with `docker compose up --build -d`. Select SOL in the UI, enter a Devnet recipient address and an amount in **lamports** (1,000,000 lamports = 0.001 SOL). The backend sends SOL and `AIFP4:<intentHash>` in the same transaction and creates a receipt only after Devnet confirmation. If confirmation is uncertain, the intent stays in `executing` and must be inspected before retrying. No mainnet mode is supported.
+To enable the optional SOL route in Compose, put a **Devnet-only**, pre-funded 64-byte keypair JSON array in `SOLANA_PAYER_SECRET_JSON` in your local untracked `.env`. Set unique `AIFP4_API_KEY` and `MESH_HMAC_SECRET` values of at least 32 characters each; the server refuses to start with demo credentials when the payer is configured. Generate each with `openssl rand -hex 32`. Recreate the container with `docker compose up --build -d`. Select SOL in the UI, enter a Devnet recipient address and an amount in **lamports** (1,000,000 lamports = 0.001 SOL). The backend sends SOL and `AIFP4:<intentHash>` in the same transaction and creates a receipt only after Devnet confirmation. If confirmation is uncertain, the intent stays in `executing` and must be inspected before retrying. No mainnet mode is supported.
 
 The standalone proof script is still available:
 

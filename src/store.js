@@ -9,10 +9,11 @@ export class IntentStore {
   }
   persist() {
     if (!this.file) return;
-    fs.mkdirSync(path.dirname(this.file), { recursive: true });
+    fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
     const temp = `${this.file}.${process.pid}.tmp`;
-    fs.writeFileSync(temp, JSON.stringify(this.data));
+    fs.writeFileSync(temp, JSON.stringify(this.data), { mode: 0o600 });
     fs.renameSync(temp, this.file);
+    fs.chmodSync(this.file, 0o600);
   }
   all(kind) { return [...this.data[kind]]; }
   find(kind, id) { return this.data[kind].find(x => x.id === id) ?? null; }
