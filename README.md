@@ -4,7 +4,7 @@
 
 AIFP-4 Mesh lets an agent create a deterministic payment intent, enforce delegated spending policy, select the best available payment rail, queue safely when connectivity is unavailable, and return a verifiable settlement receipt.
 
-This repository is the **Colosseum Crypto World's Fair MVP**. It includes a runnable local sandbox and a real Solana Devnet payment demo.
+This repository is the **Colosseum Crypto World's Fair MVP**. It includes a connected web dashboard, persistent mock sandbox API, and a separate real Solana Devnet proof script.
 
 ## Why it exists
 
@@ -35,7 +35,7 @@ From a clean clone with Docker Engine and Compose installed, start the sandbox A
 docker compose up --build -d
 ```
 
-Check `curl http://127.0.0.1:4044/health`. To stop it, run `docker compose down`. The API listens on localhost by default. For a different host port or sandbox API key, set `AIFP4_PORT`, `AIFP4_BIND_HOST` or `AIFP4_API_KEY` in an untracked `.env` file before starting Compose. The default API key is for local demos only. This version has an in-memory store, so payment state resets when the container restarts. The Solana Devnet transaction demo remains a separate script and is not executed by Compose.
+Open **http://127.0.0.1:4044/** for the UI, or check `curl http://127.0.0.1:4044/health`. To stop it, run `docker compose down`. The named Docker volume retains sandbox payment history; `docker compose down -v` removes that volume. The API listens on localhost by default. For a different host port or sandbox API key, set `AIFP4_PORT`, `AIFP4_BIND_HOST` or `AIFP4_API_KEY` in an untracked `.env` file before starting Compose. The default API key is for local demos only. Enter the configured API key in the UI if you changed the default. The key is stored only in the browser tab. Mock USDC payment and offline reconciliation work inside Compose; the Solana Devnet transaction proof remains a separate script and is not executed by the web API.
 
 Run without Docker:
 
@@ -66,6 +66,10 @@ Execute it using the returned `id`:
 curl -s -X POST http://127.0.0.1:4044/v1/intents/INTENT_ID/execute \
   -H 'x-aifp4-api-key: sandbox-demo-key'
 ```
+
+## Web demo
+
+Open the dashboard → create a Research Agent or use the preloaded one → create a USDC intent → inspect policy and route scores → execute → inspect the receipt. For offline mode, turn off the mock rail under **Mesh router**, create another USDC intent, restore the rail and reconcile. The backend persists state in a Docker volume.
 
 ## Real sandbox payment on Solana Devnet
 

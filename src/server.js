@@ -1,55 +1,50 @@
 import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 
-function json(res, status, payload) {
-  const body = JSON.stringify(payload, null, 2);
-  res.writeHead(status, {
-    'content-type': 'application/json; charset=utf-8',
-    'content-length': Buffer.byteLength(body),
-    'cache-control': 'no-store'
-  });
-  res.end(body);
+const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
+function send(res, status, payload, type = 'application/json; charset=utf-8') {
+  const data = typeof payload === 'string' ? payload : JSON.stringify(payload);
+  res.writeHead(status, { 'content-type': type, 'content-length': Buffer.byteLength(data), 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer', 'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'" }); res.end(data);
 }
-
 async function readJson(req) {
-  const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
-  if (chunks.length === 0) return {};
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  const chunks = []; let size = 0;
+  for await (const chunk of req) { size += chunk.length; if (size > 65536) throw Object.assign(new Error('Request body too large'), { code: 'PAYLOAD_TOO_LARGE' }); chunks.push(chunk); }
+  try { return chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}; } catch { throw Object.assign(new Error('Invalid JSON'), { code: 'INVALID_JSON' }); }
 }
-
 export function createServer({ service, apiKey }) {
+  const root = path.resolve('public');
   return http.createServer(async (req, res) => {
+    const requestId = randomUUID();
     try {
-      const url = new URL(req.url, 'http://localhost');
-      if (url.pathname === '/health' && req.method === 'GET') {
-        return json(res, 200, { ok: true, service: 'aifp4-mesh', version: '0.1.0' });
+      const url = new URL(req.url, 'http://localhost'); const p = url.pathname, method = req.method;
+      if (method === 'GET' && (p === '/' || ['/app.js', '/styles.css'].includes(p))) {
+        const file = path.join(root, p === '/' ? 'index.html' : p.slice(1));
+        return send(res, 200, fs.readFileSync(file, 'utf8'), types[path.extname(file)]);
       }
-
-      const suppliedKey = req.headers['x-aifp4-api-key'];
-      if (apiKey && suppliedKey !== apiKey) return json(res, 401, { error: 'UNAUTHORIZED' });
-
-      if (url.pathname === '/v1/routes' && req.method === 'GET') {
-        return json(res, 200, { routes: service.listRoutes({ asset: url.searchParams.get('asset') ?? undefined }) });
+      if (p === '/health' && method === 'GET') return send(res, 200, { ok: true, service: 'aifp4-mesh', version: '0.2.0' });
+      if (!apiKey || req.headers['x-aifp4-api-key'] !== apiKey) return send(res, 401, { error: 'UNAUTHORIZED', requestId });
+      if (method === 'GET' && p === '/v1/stats') return send(res, 200, service.stats());
+      if (method === 'GET' && p === '/v1/routes') return send(res, 200, { routes: service.listRoutes({ asset: url.searchParams.get('asset') ?? undefined }) });
+      if (method === 'POST' && p === '/v1/mesh/network') { const data = await readJson(req); if (typeof data.online !== 'boolean') return send(res, 422, { error: 'INVALID_INPUT', requestId }); return send(res, 200, { routes: service.setMockOnline(data.online) }); }
+      if (method === 'POST' && p === '/v1/mesh/reconcile') return send(res, 200, { reconciled: await service.reconcileQueued() });
+      for (const [segment, kind] of [['agents', 'agents'], ['policies', 'policies'], ['intents', 'intents'], ['transactions', 'transactions'], ['receipts', 'receipts']]) {
+        if (method === 'GET' && p === `/v1/${segment}`) return send(res, 200, { [kind]: service.store.all(kind).slice(-100).reverse() });
       }
-      if (url.pathname === '/v1/intents' && req.method === 'POST') {
-        return json(res, 201, service.createIntent(await readJson(req)));
-      }
-      if (url.pathname === '/v1/mesh/reconcile' && req.method === 'POST') {
-        return json(res, 200, { reconciled: await service.reconcileQueued() });
-      }
-
-      const match = url.pathname.match(/^\/v1\/intents\/([^/]+)(\/execute)?$/);
-      if (match && req.method === 'GET' && !match[2]) {
-        const intent = service.store.get(match[1]);
-        return intent ? json(res, 200, intent) : json(res, 404, { error: 'INTENT_NOT_FOUND' });
-      }
-      if (match && req.method === 'POST' && match[2] === '/execute') {
-        return json(res, 200, await service.execute(match[1]));
-      }
-      return json(res, 404, { error: 'NOT_FOUND' });
+      if (method === 'POST' && p === '/v1/agents') return send(res, 201, service.createAgent(await readJson(req)));
+      if (method === 'POST' && p === '/v1/policies') return send(res, 201, service.createPolicy(await readJson(req)));
+      if (method === 'POST' && p === '/v1/intents') return send(res, 201, service.createIntent(await readJson(req)));
+      const agentPolicy = p.match(/^\/v1\/agents\/([^/]+)\/policy$/);
+      if (agentPolicy && method === 'PUT') return send(res, 200, service.assignPolicy(agentPolicy[1], (await readJson(req)).policyId));
+      const detail = p.match(/^\/v1\/(agents|intents|receipts)\/([^/]+)$/);
+      if (detail && method === 'GET') { const item = detail[1] === 'intents' ? service.store.get(detail[2]) : detail[1] === 'receipts' ? service.store.all('receipts').find(x => x.receiptId === detail[2]) : service.store.find('agents', detail[2]); return item ? send(res, 200, item) : send(res, 404, { error: 'NOT_FOUND', requestId }); }
+      const execute = p.match(/^\/v1\/intents\/([^/]+)\/execute$/);
+      if (execute && method === 'POST') return send(res, 200, await service.execute(execute[1]));
+      return send(res, 404, { error: 'NOT_FOUND', requestId });
     } catch (error) {
-      const status = error?.code?.startsWith?.('INVALID') || error?.name === 'PolicyError' ? 422 : 400;
-      return json(res, status, { error: error.code ?? 'BAD_REQUEST', message: error.message, details: error.details ?? undefined });
+      const status = error.code === 'PAYLOAD_TOO_LARGE' ? 413 : error.code === 'INTENT_NOT_FOUND' ? 404 : error.name === 'PolicyError' || error.code === 'INVALID_JSON' ? 422 : 500;
+      return send(res, status, { error: error.code ?? 'INTERNAL_ERROR', message: status === 500 ? 'Internal error' : error.message, requestId });
     }
   });
 }

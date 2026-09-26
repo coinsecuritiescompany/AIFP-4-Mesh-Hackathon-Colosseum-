@@ -10,6 +10,8 @@ RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
 
 COPY --chown=node:node src ./src
 COPY --chown=node:node openapi ./openapi
+COPY --chown=node:node public ./public
+RUN mkdir -p /app/.data && chown node:node /app/.data
 
 USER node
 EXPOSE 4044

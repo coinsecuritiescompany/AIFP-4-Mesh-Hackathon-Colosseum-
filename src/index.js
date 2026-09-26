@@ -1,5 +1,6 @@
 import { MeshService } from './service.js';
 import { createServer } from './server.js';
+import { IntentStore } from './store.js';
 
 const port = Number(process.env.PORT ?? 4044);
 const apiKey = process.env.AIFP4_API_KEY ?? 'sandbox-demo-key';
@@ -18,7 +19,7 @@ const routes = [
   }
 ];
 
-const service = new MeshService({ routes, signingSecret });
+const service = new MeshService({ routes, signingSecret, store: new IntentStore(process.env.AIFP4_DATA_FILE ?? '.data/mesh.json') });
 const server = createServer({ service, apiKey });
 server.listen(port, '0.0.0.0', () => {
   console.log(`AIFP-4 Mesh sandbox listening on http://127.0.0.1:${port}`);

@@ -12,9 +12,15 @@ services:
       NODE_ENV: production
       AIFP4_API_KEY: ${AIFP4_API_KEY:-sandbox-demo-key}
       MESH_HMAC_SECRET: ${MESH_HMAC_SECRET:-sandbox-only-change-me}
+      AIFP4_DATA_FILE: /app/.data/mesh.json
+    volumes:
+      - mesh-data:/app/.data
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4044/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 20s
       timeout: 5s
       start_period: 10s
       retries: 3
+
+volumes:
+  mesh-data:

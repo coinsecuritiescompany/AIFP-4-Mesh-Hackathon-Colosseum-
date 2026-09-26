@@ -1,76 +1,150 @@
 openapi: 3.1.0
 info:
   title: AIFP-4 Mesh Sandbox API
-  version: 0.1.0
-  description: Local-first payment intent, routing and sandbox settlement API for autonomous agents.
+  version: 0.2.0
+  description: Local sandbox agent payments. Solana Devnet proof is a separate CLI flow.
 servers:
   - url: http://localhost:4044
+security:
+  - ApiKeyAuth: []
 paths:
   /health:
     get:
+      security: []
       responses:
-        '200': { description: Healthy }
+        '200': {description: Healthy}
+  /v1/stats:
+    get:
+      responses:
+        '200': {description: Dashboard counts and mock USDC volume}
   /v1/routes:
     get:
-      security: [{ ApiKeyAuth: [] }]
       parameters:
-        - in: query
-          name: asset
-          schema: { type: string }
+        - {in: query, name: asset, schema: {type: string}}
       responses:
-        '200': { description: Eligible routes }
-  /v1/intents:
+        '200': {description: Routes and online state}
+  /v1/mesh/network:
     post:
-      security: [{ ApiKeyAuth: [] }]
+      summary: Toggle mock rail connectivity for a local demo
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/CreateIntent'
+            schema: {type: object, required: [online], properties: {online: {type: boolean}}}
       responses:
-        '201': { description: Payment intent created }
-  /v1/intents/{intentId}/execute:
-    post:
-      security: [{ ApiKeyAuth: [] }]
-      parameters:
-        - in: path
-          name: intentId
-          required: true
-          schema: { type: string }
-      responses:
-        '200': { description: Intent executed or queued }
-  /v1/intents/{intentId}:
-    get:
-      security: [{ ApiKeyAuth: [] }]
-      parameters:
-        - in: path
-          name: intentId
-          required: true
-          schema: { type: string }
-      responses:
-        '200': { description: Intent state }
+        '200': {description: Updated routes}
   /v1/mesh/reconcile:
     post:
-      security: [{ ApiKeyAuth: [] }]
       responses:
-        '200': { description: Queued intents reconciled }
+        '200': {description: Reconciled queued intents}
+  /v1/agents:
+    get:
+      responses:
+        '200': {description: Agents}
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, required: [name], properties: {name: {type: string}, policy: {$ref: '#/components/schemas/PolicyInput'}}}
+      responses:
+        '201': {description: Agent created}
+  /v1/agents/{id}:
+    get:
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+      responses:
+        '200': {description: Agent}
+        '404': {description: Not found}
+  /v1/agents/{id}/policy:
+    put:
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, required: [policyId], properties: {policyId: {type: string}}}
+      responses:
+        '200': {description: Agent with assigned policy}
+  /v1/policies:
+    get:
+      responses:
+        '200': {description: Policies}
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PolicyInput'}
+      responses:
+        '201': {description: Policy created}
+  /v1/intents:
+    get:
+      responses:
+        '200': {description: Latest 100 intents}
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateIntent'}
+      responses:
+        '201': {description: Authorized or queued intent}
+        '422': {description: Policy or validation error}
+  /v1/intents/{id}:
+    get:
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+      responses:
+        '200': {description: Intent detail}
+        '404': {description: Not found}
+  /v1/intents/{id}/execute:
+    post:
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+      responses:
+        '200': {description: Settled or queued intent}
+  /v1/transactions:
+    get:
+      responses:
+        '200': {description: Latest 100 transactions}
+  /v1/receipts:
+    get:
+      responses:
+        '200': {description: Latest 100 receipts}
+  /v1/receipts/{id}:
+    get:
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+      responses:
+        '200': {description: Receipt detail}
+        '404': {description: Not found}
 components:
+  parameters:
+    Id: {in: path, name: id, required: true, schema: {type: string}}
   securitySchemes:
-    ApiKeyAuth:
-      type: apiKey
-      in: header
-      name: x-aifp4-api-key
+    ApiKeyAuth: {type: apiKey, in: header, name: x-aifp4-api-key}
   schemas:
     CreateIntent:
       type: object
-      additionalProperties: false
       required: [idempotencyKey, agentId, beneficiary, amountMinor, asset, purpose]
       properties:
-        idempotencyKey: { type: string, minLength: 1 }
-        agentId: { type: string, minLength: 1 }
-        beneficiary: { type: string, minLength: 1 }
-        amountMinor: { type: integer, minimum: 1 }
-        asset: { type: string, enum: [USDC, SOL, USD] }
-        purpose: { type: string, minLength: 1 }
-        expiresAt: { type: string, format: date-time }
+        idempotencyKey: {type: string, minLength: 3, maxLength: 128}
+        agentId: {type: string}
+        beneficiary: {type: string}
+        amountMinor: {type: integer, minimum: 1}
+        asset: {type: string, enum: [USDC, SOL]}
+        purpose: {type: string}
+        expiresAt: {type: string, format: date-time}
+    PolicyInput:
+      type: object
+      properties:
+        maxAmountMinor: {type: integer, minimum: 1}
+        dailyLimitMinor: {type: integer, minimum: 1}
+        maxTransactions: {type: integer, minimum: 1}
+        allowedAssets: {type: array, items: {type: string}}
+        allowedRails: {type: array, items: {type: string}}
+        beneficiaryAllowlist: {type: array, items: {type: string}}
+        beneficiaryDenylist: {type: array, items: {type: string}}
+        offlineAllowed: {type: boolean}
