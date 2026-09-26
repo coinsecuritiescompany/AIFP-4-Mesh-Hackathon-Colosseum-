@@ -1,0 +1,5 @@
+# Deployment
+
+From a clean clone: `docker compose up --build -d`. Open http://127.0.0.1:4044/ for the web UI. The same container serves the API and frontend. The named `mesh-data` volume preserves agents, policies, intents, receipts and transactions across restarts. Set `AIFP4_API_KEY` and `MESH_HMAC_SECRET` in an untracked `.env` for a shared sandbox. The UI requests the key and keeps it in sessionStorage for the current browser tab.
+
+`docker compose down` stops the container; `docker compose down -v` also removes demo data. A pre-funded, disposable Devnet-only `SOLANA_PAYER_SECRET_JSON` enables the SOL rail in the UI. Keep it in a local untracked `.env`. Without it, SOL is queued and mock USDC remains usable. SOL amounts are lamports and require a valid Devnet recipient. The independent `npm run devnet:payment` proof remains available. Do not use this sandbox as a production payment system.

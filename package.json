@@ -1,6 +1,6 @@
 {
   "name": "@aifinpay/aifp4-mesh-mvp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "AIFP-4 Mesh MVP: local-first payment intents, policy routing, offline queueing, and Solana Devnet settlement proof.",

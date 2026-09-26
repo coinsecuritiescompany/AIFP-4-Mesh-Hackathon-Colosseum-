@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#080d1d"><title>AIFP-4 Mesh · AiFinPay</title><link rel="stylesheet" href="/styles.css"></head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-symbol">✦</span><span>AiFinPay<small>AIFP-4 MESH</small></span></div>
+    <div class="nav-label">WORKSPACE</div>
+    <nav aria-label="Main navigation">
+      <button class="nav active" data-page="overview">◈ <span>Overview</span></button>
+      <button class="nav" data-page="pay">⊕ <span>Create payment</span></button>
+      <button class="nav" data-page="agents">◎ <span>Agents & policies</span></button>
+      <button class="nav" data-page="router">⌁ <span>Mesh router</span></button>
+      <button class="nav" data-page="transactions">▤ <span>Transactions</span></button>
+      <button class="nav" data-page="developer">⌘ <span>Developer</span></button>
+    </nav>
+    <div class="side-footer"><span class="pulse"></span> SANDBOX ENVIRONMENT <small>Mock rail · Solana Devnet proof via CLI</small></div>
+  </aside>
+  <main>
+    <div class="topbar"><span class="breadcrumb">AiFinPay <span>/</span> AIFP-4 Mesh</span><span class="topright"><span class="pill">SANDBOX</span><button id="key-button" class="text-button">API key</button></span></div>
+    <header><div><div class="eyebrow">PAYMENT INFRASTRUCTURE FOR AGENTS</div><h1 id="page-title">Control plane</h1><p id="page-caption">Authorize, route and settle agent payments in one place.</p></div><button id="quick-pay" class="primary">＋ New payment</button></header>
+    <div id="banner" class="banner hidden" role="alert"></div>
+    <section id="view" aria-live="polite"></section>
+    <footer>AiFinPay · AIFP-4 Mesh <span>Sandbox orchestration · No mainnet execution</span></footer>
+  </main>
+</div>
+<dialog id="key-dialog"><form method="dialog" id="key-form"><h2>Connect to sandbox</h2><p>Enter the API key configured in Docker Compose. It stays in this browser tab.</p><label>Sandbox API key<input id="key-input" type="password" autocomplete="off" required></label><div class="actions"><button value="cancel" class="ghost">Cancel</button><button value="save" class="primary">Connect</button></div></form></dialog>
+<script type="module" src="/app.js"></script>
+</body></html>
