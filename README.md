@@ -29,9 +29,18 @@ AIFP-4 Mesh separates those concerns:
 
 ## Quick start
 
+From a clean clone with Docker Engine and Compose installed, start the sandbox API with one command:
+
 ```bash
-npm install
-cp .env.example .env
+docker compose up --build -d
+```
+
+Check `curl http://127.0.0.1:4044/health`. To stop it, run `docker compose down`. The API listens on localhost by default. For a different host port or sandbox API key, set `AIFP4_PORT`, `AIFP4_BIND_HOST` or `AIFP4_API_KEY` in an untracked `.env` file before starting Compose. The default API key is for local demos only. This version has an in-memory store, so payment state resets when the container restarts. The Solana Devnet transaction demo remains a separate script and is not executed by Compose.
+
+Run without Docker:
+
+```bash
+npm ci
 npm test
 npm start
 ```
