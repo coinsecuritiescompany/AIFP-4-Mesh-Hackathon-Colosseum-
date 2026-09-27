@@ -41,7 +41,8 @@ try { for(const id of ['c','b','d','a']) start(id); } catch(error) { for(const i
 test.after(()=>{for(const id of children.keys()) stop(id); fs.rmSync(root,{recursive:true,force:true});});
 
 test('independent nodes discover signed capabilities and heterogeneous links',async()=>{
-  await waitFor(async()=>{const topology=await api('a','/v1/mesh/topology'); return topology.topology.nodes.length>=4 && topology.topology.links.some(e=>e.from==='node-b'&&e.to==='node-c'&&e.transport==='libp2p');},30000);
+  await waitFor(async()=>{const topology=await api('a','/v1/mesh/topology'); return topology.topology.nodes.length>=4 && topology.topology.links.some(e=>e.from==='node-a'&&e.to==='node-b'&&e.transport==='tcp') && topology.topology.links.some(e=>e.from==='node-b'&&e.to==='node-c'&&e.transport==='libp2p');},30000);
+  await waitFor(async()=>(await api('b','/v1/mesh/links')).links.some(e=>e.to==='node-c'&&e.transport==='libp2p'&&e.online));
   const node=await api('a','/v1/mesh/node'); assert.match(node.peerId,/^12D3/);
   assert.equal(node.canSettle,false);
 });
