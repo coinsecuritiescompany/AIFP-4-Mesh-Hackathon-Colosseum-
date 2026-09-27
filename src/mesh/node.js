@@ -165,7 +165,12 @@ export class MeshNode {
   async #settle(payload) {
     const intent=payload.intent, old=this.service.store.get(intent.id);
     if(old && old.intentHash!==intent.intentHash) throw new Error('IDEMPOTENCY_CONFLICT');
-    if(this.state.meshReceipts[intent.id]) return this.state.meshReceipts[intent.id];
+    if(this.state.meshReceipts[intent.id]) {
+      // The node may have crashed after persisting the signed receipt but
+      // before committing its outbound bundle. Recreate that missing work.
+      if(!this.deliveryDatabase.bundles().some(b=>b.kind==='receipt'&&b.intentId===intent.id)) this.coordinator.enqueueReceipt(this.state.meshReceipts[intent.id]);
+      return this.state.meshReceipts[intent.id];
+    }
     if(old?.state==='executing') throw new Error('EXECUTION_UNCERTAIN');
     if(!old) {
       if(!this.service.store.find('policies',payload.policy.id)) this.service.store.add('policies',payload.policy);
@@ -205,12 +210,10 @@ export class MeshNode {
     if(!intent) throw new Error('UNKNOWN_INTENT');
     if(intent.state==='settled') return intent;
     this.verifyReceipt(receipt,intent);
-    intent.receipt=receipt; intent.state='settled'; intent.meshPath=receipt.meshPath; intent.transportPath=receipt.transportPath; intent.receiptVerified=true;
-    this.service.store.add('receipts',receipt);
-    this.service.store.add('transactions',{id:randomUUID(),intentId:intent.id,agentId:intent.agentId,beneficiary:intent.beneficiary,amountMinor:intent.amountMinor,asset:intent.asset,rail:receipt.rail,state:'settled',reference:receipt.executionReference,createdAt:receipt.settledAt});
-    this.service.store.save(intent); this.deliveries.deliveredIntent(intent.id);
+    const transaction={id:randomUUID(),intentId:intent.id,agentId:intent.agentId,beneficiary:intent.beneficiary,amountMinor:intent.amountMinor,asset:intent.asset,rail:receipt.rail,state:'settled',reference:receipt.executionReference,createdAt:receipt.settledAt};
+    const settled=this.service.store.commitMeshReceipt(intent.id,receipt,transaction);this.deliveries.deliveredIntent(intent.id);
     for(const bundle of this.deliveryDatabase.bundles().filter(b=>b.kind==='payment'&&b.intentId===intent.id&&['QUEUED','WAITING_LINK','SUBMITTED','HOP_ACCEPTED'].includes(b.state))) this.deliveryDatabase.updateBundle(bundle.bundleId,bundle.state,'DELIVERED');
-    this.event('receipt.received',{intentId:intent.id,settlementNodeId:receipt.settlementNodeId}); return intent;
+    this.event('receipt.received',{intentId:intent.id,settlementNodeId:receipt.settlementNodeId}); return settled;
   }
   async dispatch(id) {
     if(this.pending.has(id)) return this.pending.get(id);
