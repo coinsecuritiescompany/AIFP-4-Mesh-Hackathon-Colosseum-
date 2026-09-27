@@ -1,0 +1,3 @@
+# Physical transport acceptance
+
+Use two independent devices with no fallback IP link between them. Capture adapter startup, hardware identifiers without private keys, link metrics, fragment message ID, authenticated signed AIFP envelope, node/transport path, payment receipt and origin verification. Disable the physical link and confirm queue persistence/recovery. For radio, validate permitted region, frequency, power and duty cycle with a qualified spectrum specialist before transmitting; this is not legal advice. For satellite record provider message IDs and gateway delivery. Hardware tests live under `tests/hardware` and explicitly skip until real adapters and devices are present.

@@ -1,0 +1,3 @@
+# BPv7 interoperability gate
+
+Current Mesh envelopes are signed AIFP messages encoded with CBOR. They are **not RFC 9171 bundles**. A sidecar must run a real interoperable BPv7 daemon (for example ION or a maintained dtn7 implementation), map node IDs to endpoint IDs, inject the untouched envelope as a bundle payload, and deliver asynchronously into the same envelope verifier. A disconnect/reconnect test against an independent daemon and packet evidence are required before changing status. BPSec requires separate RFC 9172 block/profile verification. No daemon is installed in the default Compose topology.

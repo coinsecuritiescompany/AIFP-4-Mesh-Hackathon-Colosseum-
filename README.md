@@ -2,6 +2,8 @@
 
 **A transport-independent payment message layer for AI agents.** The Colosseum MVP runs independent nodes that discover peers, forward signed payment intents over TCP and libp2p, route to a settlement-capable node, and return a verified receipt. Mock USDC is the default rail; SOL settlement requires a separately funded **Solana Devnet-only** payer on node C.
 
+Implementation evidence and external blockers: [status matrix](docs/IMPLEMENTATION_STATUS.md). TCP and libp2p are the tested network links. A compact CBOR fragmentation component has software tests; it is not yet connected to transport send/receive. Bluetooth, radio, non-IP satellite, BPv7 and ProSe are not operational. Optional funded Devnet proof: `node scripts/compose-devnet-smoke.mjs` after providing a disposable pre-funded Devnet payer to node C through an untracked `.env`.
+
 ## Run the network
 
 ```bash

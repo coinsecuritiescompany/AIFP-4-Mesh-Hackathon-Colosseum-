@@ -1,0 +1,26 @@
+name: optional Devnet Mesh settlement
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  devnet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SOLANA_PAYER_SECRET_JSON: ${{ secrets.SOLANA_DEVNET_DISPOSABLE_PAYER_JSON }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts
+      - name: Check disposable payer and configure isolated demo credentials
+        run: |
+          test -n "$SOLANA_PAYER_SECRET_JSON" || { echo 'Disposable Devnet payer secret is missing'; exit 1; }
+          echo "AIFP4_API_KEY=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "MESH_HMAC_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+      - run: docker compose up --build -d --wait
+      - run: node scripts/compose-devnet-smoke.mjs
+      - if: always()
+        run: docker compose down

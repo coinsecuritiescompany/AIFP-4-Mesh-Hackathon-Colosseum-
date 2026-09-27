@@ -92,7 +92,7 @@ export class MeshNode {
       }
       this.advertise();
       for(const intent of this.service.store.all('intents').filter(i=>i.state==='queued_for_mesh')) await this.dispatch(intent.id).catch(()=>{});
-      for(const item of [...this.state.queuedBundles]) {
+      for(const item of [...this.state.queuedBundles].sort((a,b)=>(b.priority??0)-(a.priority??0) || a.nextAttempt-b.nextAttempt)) {
         if(Date.parse(item.expiresAt)<=Date.now()) { this.state.queuedBundles=this.state.queuedBundles.filter(x=>x.id!==item.id); this.event('bundle.expired',{intentId:item.intentId}); continue; }
         if(item.nextAttempt>Date.now()) continue;
         try {
@@ -189,12 +189,21 @@ export class MeshNode {
     const core={receiptId:completed.receipt.receiptId,intentId:intent.id,intentHash:intent.intentHash,originNodeId:payload.originNodeId,settlementNodeId:this.nodeId,meshPath:payload.path,transportPath:payload.transportPath,rail:execution.rail,network:execution.network,asset:intent.asset,amountMinor:intent.amountMinor,executionReference:execution.reference,settledAt:execution.settledAt,explorer:execution.explorer ?? null};
     const receipt={...core,receiptHash:sha256(core),settlementNodeSignature:this.identity.sign(core)};
     this.state.meshReceipts[intent.id]=receipt; this.persist(); this.event('receipt.created',{intentId:intent.id});
-    queueMicrotask(()=>this.forwardReceipt({receipt,path:[this.nodeId]}).catch(()=>this.queueBundle('receipt',{receipt,path:[this.nodeId]},new Date(Date.now()+60000).toISOString(),intent.id)));
+    queueMicrotask(()=>this.forwardReceipt({receipt,path:[this.nodeId]}).catch(()=>{
+      try { this.queueBundle('receipt',{receipt,path:[this.nodeId]},new Date(Date.now()+60000).toISOString(),intent.id); }
+      catch(error) { this.event('route.failed',{intentId:intent.id,reason:error.message}); }
+    }));
     return receipt;
   }
   queueBundle(type,payload,expiresAt,intentId) {
     if(this.state.queuedBundles.some(x=>x.intentId===intentId && x.type===type)) return;
-    this.state.queuedBundles.push({id:randomUUID(),type,payload,expiresAt,intentId,attempts:0,nextAttempt:Date.now()+1000});
+    const bytes=Buffer.byteLength(JSON.stringify(payload));
+    if(!Number.isFinite(Date.parse(expiresAt)) || Date.parse(expiresAt)<=Date.now() || bytes>65536) throw new Error('INVALID_QUEUED_BUNDLE');
+    const active=this.state.queuedBundles.filter(x=>Date.parse(x.expiresAt)>Date.now());
+    const origin=type==='payment'?payload.originNodeId:payload.receipt?.settlementNodeId;
+    if(active.length>=64 || active.filter(x=>(x.type==='payment'?x.payload.originNodeId:x.payload.receipt?.settlementNodeId)===origin).length>=16 || active.reduce((sum,x)=>sum+Buffer.byteLength(JSON.stringify(x.payload)),0)+bytes>4*1024*1024) throw new Error('MESH_QUEUE_FULL');
+    this.state.queuedBundles=active;
+    this.state.queuedBundles.push({id:randomUUID(),type,payload,expiresAt,intentId,priority:type==='receipt'?2:1,attempts:0,nextAttempt:Date.now()+1000});
     this.event('bundle.queued',{intentId,type});
   }
   async forwardReceipt(payload) {
