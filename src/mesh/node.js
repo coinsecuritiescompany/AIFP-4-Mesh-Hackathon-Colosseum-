@@ -5,7 +5,7 @@ import { sha256 } from '../canonical.js';
 import { evaluatePolicy } from '../policy.js';
 import { envelope, validateEnvelope } from './protocol.js';
 import { loadIdentity, verifySigned } from './identity.js';
-import { planRoute } from './routing.js';
+import { planRoute, planNodeRoute } from './routing.js';
 import { TcpTransport } from './transports/tcp.js';
 import { Libp2pTransport } from './transports/libp2p.js';
 
@@ -16,6 +16,7 @@ export class MeshNode {
     this.identity=loadIdentity(path.join(dataDir,'identity.json'),nodeId);
     this.file=path.join(dataDir,'mesh-state.json');
     this.state=fs.existsSync(this.file) ? JSON.parse(fs.readFileSync(this.file,'utf8')) : { peerKeys:{}, advertisements:{}, seen:{}, meshReceipts:{}, sequence:0, events:[] };
+    this.state.queuedBundles ??=[];
     this.links=new Map(); this.pending=new Map(); this.settling=new Map(); this.busy=false;
     const receive=(message,transport,remotePeer)=>this.receive(message,transport,remotePeer);
     this.transports=new Map([['tcp',new TcpTransport(tcpPort,receive)],['libp2p',new Libp2pTransport(p2pPort,path.join(dataDir,'libp2p.key'),receive)]]);
@@ -91,6 +92,19 @@ export class MeshNode {
       }
       this.advertise();
       for(const intent of this.service.store.all('intents').filter(i=>i.state==='queued_for_mesh')) await this.dispatch(intent.id).catch(()=>{});
+      for(const item of [...this.state.queuedBundles]) {
+        if(Date.parse(item.expiresAt)<=Date.now()) { this.state.queuedBundles=this.state.queuedBundles.filter(x=>x.id!==item.id); this.event('bundle.expired',{intentId:item.intentId}); continue; }
+        if(item.nextAttempt>Date.now()) continue;
+        try {
+          if(item.type==='payment') {
+            const receipt=await this.forward(item.payload);
+            await this.forwardReceipt({receipt,path:[this.nodeId]});
+          } else await this.forwardReceipt(item.payload);
+          this.state.queuedBundles=this.state.queuedBundles.filter(x=>x.id!==item.id); this.persist();
+        } catch {
+          item.attempts++; item.nextAttempt=Date.now()+Math.min(30000,1000*2**Math.min(item.attempts,5)); this.persist();
+        }
+      }
     } finally { this.busy=false; }
   }
   async receive(message,transport,remotePeer) {
@@ -110,14 +124,30 @@ export class MeshNode {
     }
     if(message.messageType==='PAYMENT_FORWARD') {
       try { const receipt=await this.receivePayment(message.payload, message.sourceNodeId,transport); return envelope(this.identity,'PAYMENT_RECEIPT',{receipt},{destinationNodeId:message.sourceNodeId}); }
-      catch(error) { return envelope(this.identity,'PAYMENT_FAILED',{code:error.code ?? error.message},{destinationNodeId:message.sourceNodeId}); }
+      catch(error) {
+        if(error.message==='QUEUED_FOR_MESH') return envelope(this.identity,'PAYMENT_ACK',{state:'queued_for_mesh'},{destinationNodeId:message.sourceNodeId});
+        return envelope(this.identity,'PAYMENT_FAILED',{code:error.code ?? error.message},{destinationNodeId:message.sourceNodeId});
+      }
+    }
+    if(message.messageType==='PAYMENT_RECEIPT') {
+      const receipt=message.payload?.receipt;
+      if(!receipt || !Array.isArray(message.payload.path) || message.payload.path.includes(this.nodeId) || message.payload.path.at(-1)!==message.sourceNodeId) throw new Error('INVALID_RECEIPT_PATH');
+      if(receipt.originNodeId===this.nodeId) this.acceptReceipt(receipt);
+      else {
+        const payload={receipt,path:[...message.payload.path,this.nodeId]};
+        try { await this.forwardReceipt(payload); }
+        catch { this.queueBundle('receipt',payload,new Date(Date.now()+60000).toISOString(),receipt.intentId); }
+      }
+      return envelope(this.identity,'PAYMENT_ACK',{state:'received'},{destinationNodeId:message.sourceNodeId});
     }
     throw new Error('UNSUPPORTED_MESSAGE');
   }
   verifyPayload(payload) {
     const {intent,originNodeId,originPublicKey,originSignature,path:trail,transportPath}=payload ?? {};
     const originAd=payload?.originAdvertisement;
-    if(originAd?.data?.nodeId!==originNodeId || originAd.data.publicKey!==originPublicKey || !verifySigned(originAd.data,originAd.signature,originPublicKey) || originAd.data.expiresAt<=Date.now()) throw new Error('INVALID_ORIGIN_ADVERTISEMENT');
+    // An accepted bundle can outlive a route advertisement while disconnected.
+    // The signed payment expiry, rather than the discovery lease, bounds delivery.
+    if(originAd?.data?.nodeId!==originNodeId || originAd.data.publicKey!==originPublicKey || !verifySigned(originAd.data,originAd.signature,originPublicKey)) throw new Error('INVALID_ORIGIN_ADVERTISEMENT');
     if(!this.state.peerKeys[originNodeId]) { this.state.peerKeys[originNodeId]=originPublicKey; this.persist(); }
     if(!intent || typeof originNodeId!=='string' || !Array.isArray(trail) || !Array.isArray(transportPath) || trail.length>8 || transportPath.length>8 || trail[0]!==originNodeId || this.state.peerKeys[originNodeId]!==originPublicKey || !verifySigned({intentHash:intent.intentHash,originNodeId,agent:payload.agent,policy:payload.policy,currentPolicy:payload.currentPolicy},originSignature,originPublicKey)) throw new Error('INVALID_ORIGIN');
     const fields=['protocol','version','id','idempotencyKey','agentId','agentPassportId','sponsorId','beneficiary','amountMinor','asset','purpose','createdAt','expiresAt','policyId','nonce'];
@@ -130,7 +160,11 @@ export class MeshNode {
     const next={...payload,path:[...payload.path,this.nodeId]};
     this.event('bundle.received',{intentId:payload.intent.id,from:previousHop,transport});
     if(this.capability().canSettle && this.capability().assets.includes(payload.intent.asset)) return this.settle(next);
-    return this.forward(next);
+    try { return await this.forward(next); }
+    catch(error) {
+      if(error.message==='NO_MESH_ROUTE') { this.queueBundle('payment',next,next.intent.expiresAt,next.intent.id); throw new Error('QUEUED_FOR_MESH'); }
+      throw error;
+    }
   }
   async settle(payload) {
     const id=payload.intent.id;
@@ -154,7 +188,32 @@ export class MeshNode {
     const execution=completed.receipt.execution;
     const core={receiptId:completed.receipt.receiptId,intentId:intent.id,intentHash:intent.intentHash,originNodeId:payload.originNodeId,settlementNodeId:this.nodeId,meshPath:payload.path,transportPath:payload.transportPath,rail:execution.rail,network:execution.network,asset:intent.asset,amountMinor:intent.amountMinor,executionReference:execution.reference,settledAt:execution.settledAt,explorer:execution.explorer ?? null};
     const receipt={...core,receiptHash:sha256(core),settlementNodeSignature:this.identity.sign(core)};
-    this.state.meshReceipts[intent.id]=receipt; this.persist(); this.event('receipt.created',{intentId:intent.id}); return receipt;
+    this.state.meshReceipts[intent.id]=receipt; this.persist(); this.event('receipt.created',{intentId:intent.id});
+    queueMicrotask(()=>this.forwardReceipt({receipt,path:[this.nodeId]}).catch(()=>this.queueBundle('receipt',{receipt,path:[this.nodeId]},new Date(Date.now()+60000).toISOString(),intent.id)));
+    return receipt;
+  }
+  queueBundle(type,payload,expiresAt,intentId) {
+    if(this.state.queuedBundles.some(x=>x.intentId===intentId && x.type===type)) return;
+    this.state.queuedBundles.push({id:randomUUID(),type,payload,expiresAt,intentId,attempts:0,nextAttempt:Date.now()+1000});
+    this.event('bundle.queued',{intentId,type});
+  }
+  async forwardReceipt(payload) {
+    const {receipt,path:trail}=payload;
+    if(!receipt || !Array.isArray(trail) || trail.length>8 || new Set(trail).size!==trail.length) throw new Error('INVALID_RECEIPT_PATH');
+    if(receipt.originNodeId===this.nodeId) { this.acceptReceipt(receipt); return; }
+    const failed=new Set();
+    while(true) {
+      const route=planNodeRoute(this.nodeId,receipt.originNodeId,this.graph(),[...trail.slice(0,-1),...failed]);
+      if(!route?.edges.length) throw new Error('NO_RECEIPT_ROUTE');
+      const edge=route.edges[0], peer=this.peers[edge.to];
+      if(!peer) { failed.add(edge.to); continue; }
+      try {
+        const response=await this.transports.get(edge.transport).send(peer,envelope(this.identity,'PAYMENT_RECEIPT',{receipt,path:trail},{originNodeId:receipt.settlementNodeId,destinationNodeId:edge.to,hopCount:trail.length,maxHops:8}));
+        validateEnvelope(response,this.state.peerKeys[edge.to]);
+        if(response.sourceNodeId!==edge.to || response.messageType!=='PAYMENT_ACK') throw new Error('RECEIPT_NOT_ACKED');
+        this.event('receipt.forwarded',{intentId:receipt.intentId,to:edge.to,transport:edge.transport}); return;
+      } catch { failed.add(edge.to); }
+    }
   }
   verifyReceipt(receipt,intent) {
     if(!receipt || receipt.intentId!==intent.id || receipt.intentHash!==intent.intentHash || receipt.originNodeId!==this.nodeId) throw new Error('INVALID_RECEIPT');
@@ -162,6 +221,16 @@ export class MeshNode {
     const key=this.state.peerKeys[receipt.settlementNodeId];
     if(!key || receiptHash!==sha256(core) || !verifySigned(core,settlementNodeSignature,key)) throw new Error('INVALID_RECEIPT_SIGNATURE');
     return true;
+  }
+  acceptReceipt(receipt) {
+    const intent=this.service.store.get(receipt.intentId);
+    if(!intent) throw new Error('UNKNOWN_INTENT');
+    if(intent.state==='settled') return intent;
+    this.verifyReceipt(receipt,intent);
+    intent.receipt=receipt; intent.state='settled'; intent.meshPath=receipt.meshPath; intent.transportPath=receipt.transportPath; intent.receiptVerified=true;
+    this.service.store.add('receipts',receipt);
+    this.service.store.add('transactions',{id:randomUUID(),intentId:intent.id,agentId:intent.agentId,beneficiary:intent.beneficiary,amountMinor:intent.amountMinor,asset:intent.asset,rail:receipt.rail,state:'settled',reference:receipt.executionReference,createdAt:receipt.settledAt});
+    this.service.store.save(intent); this.event('receipt.received',{intentId:intent.id,settlementNodeId:receipt.settlementNodeId}); return intent;
   }
   async forward(payload) {
     const excluded=[...payload.path.slice(0,-1)];
@@ -201,15 +270,12 @@ export class MeshNode {
     evaluatePolicy(intent,policy,usage); evaluatePolicy(intent,currentPolicy,usage);
     const payload={intent,agent,policy,currentPolicy,originNodeId:this.nodeId,originPublicKey:this.identity.publicKey,originAdvertisement:this.state.advertisements[this.nodeId],originSignature:this.identity.sign({intentHash:intent.intentHash,originNodeId:this.nodeId,agent,policy,currentPolicy}),path:[this.nodeId],transportPath:[]};
     try {
-      const receipt=await this.forward(payload); this.verifyReceipt(receipt,intent);
-      intent.receipt=receipt; intent.state='settled'; intent.meshPath=receipt.meshPath; intent.transportPath=receipt.transportPath; intent.receiptVerified=true;
-      this.service.store.add('receipts',receipt); this.service.store.add('transactions',{id:randomUUID(),intentId:id,agentId:intent.agentId,beneficiary:intent.beneficiary,amountMinor:intent.amountMinor,asset:intent.asset,rail:receipt.rail,state:'settled',reference:receipt.executionReference,createdAt:receipt.settledAt});
-      this.service.store.save(intent); this.event('receipt.received',{intentId:id,settlementNodeId:receipt.settlementNodeId}); return intent;
+      const receipt=await this.forward(payload); return this.acceptReceipt(receipt);
     } catch(error) {
       if(error.message==='EXECUTION_UNCERTAIN') { intent.state='executing'; this.service.store.save(intent); }
-      else { intent.state='queued_for_mesh'; this.service.store.save(intent); this.event('bundle.queued',{intentId:id,reason:error.message}); }
+      else if(intent.state!=='settled') { intent.state='queued_for_mesh'; this.service.store.save(intent); this.event('bundle.queued',{intentId:id,reason:error.message}); }
       return intent;
     }
   }
-  snapshot() { return {node:{...this.capability(),transports:[...this.transports.values()].map(t=>t.health())},peers:Object.values(this.peers).map(p=>({nodeId:p.id,publicKey:this.state.peerKeys[p.id] ?? null,online:[...this.links.values()].some(l=>l.to===p.id && l.online)})),links:[...this.links.values()],routes:this.catalog().map(a=>a.data),topology:{nodes:this.catalog().map(a=>({nodeId:a.data.nodeId,canSettle:a.data.canSettle,assets:a.data.assets,rails:a.data.rails,peerId:a.data.peerId})),links:this.graph()},queue:this.service.store.all('intents').filter(i=>i.state==='queued_for_mesh').map(i=>({id:i.id,asset:i.asset,expiresAt:i.expiresAt})),messages:this.state.events.slice(-100)}; }
+  snapshot() { return {node:{...this.capability(),transports:[...this.transports.values()].map(t=>t.health())},peers:Object.values(this.peers).map(p=>({nodeId:p.id,publicKey:this.state.peerKeys[p.id] ?? null,online:[...this.links.values()].some(l=>l.to===p.id && l.online)})),links:[...this.links.values()],routes:this.catalog().map(a=>a.data),topology:{nodes:this.catalog().map(a=>({nodeId:a.data.nodeId,canSettle:a.data.canSettle,assets:a.data.assets,rails:a.data.rails,peerId:a.data.peerId})),links:this.graph()},queue:[...this.service.store.all('intents').filter(i=>i.state==='queued_for_mesh').map(i=>({id:i.id,asset:i.asset,expiresAt:i.expiresAt})),...this.state.queuedBundles.map(b=>({id:b.id,intentId:b.intentId,type:b.type,expiresAt:b.expiresAt}))],messages:this.state.events.slice(-100)}; }
 }

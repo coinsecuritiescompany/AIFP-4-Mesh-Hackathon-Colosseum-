@@ -23,7 +23,7 @@ The script proves A → B via TCP, B → C via libp2p, stops B, proves A → D v
 | Mesh | Ed25519 signed CBOR envelopes, persistent peer identities, signed capability/link advertisements, multi-hop forwarding, replay cache and hop/expiry limits. |
 | Transport | Two real software adapters: length-framed TCP and libp2p TCP with Noise/Yamux. Links are transport-specific edges; the same payment payload crosses both. |
 | Routing | Weighted shortest path over current signed link advertisements; failed next hop is excluded and an alternative is tried. Settlement rail scoring remains separate. |
-| Disruption | Origin persists `queued_for_mesh` and retries after route recovery. Settlement node persists execution and returns the same receipt for duplicates. An uncertain settlement is locked. |
+| Disruption | Origin and relays persist queued bundles and retry after route recovery. Settlement node persists execution and returns the same receipt for duplicates. An uncertain settlement is locked. |
 | Payment | Existing agents, policies, deterministic intent hash, mock rail, offline mode, receipts, API and UI remain. Node C is the only default settlement node. |
 | Solana | Optional real Devnet SOL adapter on node C, with `AIFP4:<intentHash>` memo and confirmed transaction signature. No funded Devnet transaction was run as part of the Mesh tests. |
 
