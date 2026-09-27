@@ -9,6 +9,7 @@ import { planRoute, planNodeRoute } from './routing.js';
 import { TcpTransport } from './transports/tcp.js';
 import { Libp2pTransport } from './transports/libp2p.js';
 import { DeliveryJournal } from './delivery-journal.js';
+import { DeliveryDatabase } from './storage/delivery-database.js';
 
 const TTL = 9000;
 export class MeshNode {
@@ -18,7 +19,8 @@ export class MeshNode {
     this.file=path.join(dataDir,'mesh-state.json');
     this.state=fs.existsSync(this.file) ? JSON.parse(fs.readFileSync(this.file,'utf8')) : { peerKeys:{}, advertisements:{}, seen:{}, meshReceipts:{}, sequence:0, events:[] };
     this.state.queuedBundles ??=[];
-    this.deliveries=new DeliveryJournal(this.state,()=>this.persist());
+    this.deliveryDatabase=new DeliveryDatabase(path.join(dataDir,'mesh-delivery.sqlite'),this.state);
+    this.deliveries=new DeliveryJournal(this.state,()=>this.persist(),this.deliveryDatabase);
     this.links=new Map(); this.pending=new Map(); this.settling=new Map(); this.busy=false;
     const receive=(message,transport,remotePeer)=>this.receive(message,transport,remotePeer);
     this.transports=new Map([['tcp',new TcpTransport(tcpPort,receive,{mtu:Number(process.env.MESH_TCP_FRAME_MTU ?? 4096),fragmentFile:path.join(dataDir,'tcp-fragments.json')})],['libp2p',new Libp2pTransport(p2pPort,path.join(dataDir,'libp2p.key'),receive)]]);
@@ -26,7 +28,8 @@ export class MeshNode {
   persist() {
     fs.mkdirSync(this.dataDir,{recursive:true,mode:0o700});
     const tmp=`${this.file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp,JSON.stringify(this.state),{mode:0o600}); fs.renameSync(tmp,this.file); fs.chmodSync(this.file,0o600);
+    const {deliveryOutbox,deliveryInbox,...legacyState}=this.state;
+    fs.writeFileSync(tmp,JSON.stringify(legacyState),{mode:0o600}); fs.renameSync(tmp,this.file); fs.chmodSync(this.file,0o600);
   }
   event(type, fields={}) { this.state.events.push({ id:randomUUID(), type, nodeId:this.nodeId, timestamp:new Date().toISOString(), ...fields }); this.state.events=this.state.events.slice(-300); this.persist(); }
   capability() {
@@ -66,7 +69,7 @@ export class MeshNode {
     await this.tick();
     this.timer=setInterval(()=>this.tick().catch(()=>{}),this.tickMs);
   }
-  async stop() { clearInterval(this.timer); for(const adapter of this.transports.values()) await adapter.stop(); }
+  async stop() { clearInterval(this.timer); for(const adapter of this.transports.values()) await adapter.stop(); this.deliveryDatabase.close(); }
   recoverOutbox(startup=true) {
     for(const item of this.deliveries.pendingRecovery().filter(x=>startup || x.state==='FAILED_TEMPORARY')) {
       if(Date.parse(item.expiresAt)<=Date.now()) {this.deliveries.mark(item.messageId,'EXPIRED');continue;}
@@ -81,7 +84,7 @@ export class MeshNode {
         this.deliveries.mark(item.messageId,'QUEUED');
         // The queue/intent is durable. A retry constructs a fresh signed hop
         // envelope so a lost ACK cannot bypass the receiver's replay cache.
-        delete this.state.deliveryOutbox[item.messageId].recovery;this.persist();
+        this.deliveries.clearRecovery(item.messageId);
       } catch(error) {this.event('route.failed',{intentId:item.intentId,reason:error.message});}
     }
   }
