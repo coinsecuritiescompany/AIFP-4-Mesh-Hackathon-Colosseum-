@@ -17,7 +17,7 @@ const peer=(id,options={})=>({id:`node-${id}`, ...(options.tcp?{tcp:{host:'127.0
 const topology={
   a:[peer('b',{tcp:true,p2p:true,p2pCost:35}),peer('d',{p2p:true,p2pCost:30})],
   b:[peer('a',{tcp:true,p2p:true,p2pCost:35}),peer('c',{p2p:true,p2pCost:10})],
-  c:[peer('b',{p2p:true,p2pCost:10}),peer('d',{tcp:true,tcpCost:20})],
+  c:[peer('b',{p2p:true,p2pCost:200}),peer('d',{tcp:true,tcpCost:20})],
   d:[peer('a',{p2p:true,p2pCost:30}),peer('c',{tcp:true,tcpCost:20})]
 };
 function start(id) {
@@ -29,7 +29,7 @@ function stop(id) { children.get(id)?.kill('SIGKILL'); children.delete(id); }
 async function waitFor(fn,timeout=20000) {
   const until=Date.now()+timeout; let last;
   while(Date.now()<until) { try { const result=await fn(); if(result) return result; } catch(error) { last=error; } await new Promise(r=>setTimeout(r,300)); }
-  const snapshots={}; for(const id of ['a','b','c','d']) try { snapshots[id]={links:(await api(id,'/v1/mesh/links')).links,routes:(await api(id,'/v1/mesh/routes')).routes.map(x=>x.nodeId)}; } catch {}
+  const snapshots={}; for(const id of ['a','b','c','d']) try { snapshots[id]={links:(await api(id,'/v1/mesh/links')).links,routes:(await api(id,'/v1/mesh/routes')).routes.map(x=>x.nodeId),queue:(await api(id,'/v1/mesh/queue')).queue,events:(await api(id,'/v1/mesh/messages')).messages.slice(-10)}; } catch {}
   throw new Error(`Wait timed out: ${last?.message ?? ''} ${JSON.stringify(snapshots)} ${JSON.stringify(Object.fromEntries(logs))}`);
 }
 async function api(id,route,method='GET',body) {
@@ -37,19 +37,25 @@ async function api(id,route,method='GET',body) {
   const value=await res.json(); if(!res.ok) throw new Error(`${res.status} ${JSON.stringify(value)}`); return value;
 }
 const payment=()=>({agentId:'agent_demo',beneficiary:'ai-data-api',amountMinor:250,asset:'USDC',purpose:'Mesh integration',idempotencyKey:`integration-${crypto.randomUUID()}`});
+async function executeAndWait(id,timeout=30000) {
+  const submitted=await api('a',`/v1/intents/${id}/execute`,'POST');
+  assert.ok(['queued_for_mesh','settled'].includes(submitted.state));
+  return waitFor(async()=>{const current=await api('a',`/v1/intents/${id}`);return current.state==='settled'?current:null;},timeout);
+}
 try { for(const id of ['c','b','d','a']) start(id); } catch(error) { for(const id of children.keys()) stop(id); throw error; }
 test.after(()=>{for(const id of children.keys()) stop(id); fs.rmSync(root,{recursive:true,force:true});});
 
 test('independent nodes discover signed capabilities and heterogeneous links',async()=>{
   await waitFor(async()=>{const topology=await api('a','/v1/mesh/topology'); return topology.topology.nodes.length>=4 && topology.topology.links.some(e=>e.from==='node-a'&&e.to==='node-b'&&e.transport==='tcp') && topology.topology.links.some(e=>e.from==='node-b'&&e.to==='node-c'&&e.transport==='libp2p');},30000);
   await waitFor(async()=>(await api('b','/v1/mesh/links')).links.some(e=>e.to==='node-c'&&e.transport==='libp2p'&&e.online));
+  await waitFor(async()=>(await api('c','/v1/mesh/topology')).topology.links.some(e=>e.from==='node-c'&&e.to==='node-d'&&e.transport==='tcp') && (await api('d','/v1/mesh/links')).links.some(e=>e.to==='node-a'&&e.transport==='libp2p'&&e.online));
   const node=await api('a','/v1/mesh/node'); assert.match(node.peerId,/^12D3/);
   assert.equal(node.canSettle,false);
   assert.equal(node.transports.find(t=>t.id==='tcp').mtu,400);
 });
 test('A to B by TCP, B to C by libp2p settles and verifies receipt',async()=>{
   const intent=await api('a','/v1/intents','POST',payment());
-  const result=await api('a',`/v1/intents/${intent.id}/execute`,'POST');
+  const result=await executeAndWait(intent.id);
   assert.equal(result.state,'settled',JSON.stringify(result));
   assert.deepEqual(result.meshPath,['node-a','node-b','node-c']);
   assert.deepEqual(result.transportPath.map(e=>e.transport),['tcp','libp2p']);
@@ -57,12 +63,30 @@ test('A to B by TCP, B to C by libp2p settles and verifies receipt',async()=>{
   const journal=(await api('a','/v1/mesh/deliveries')).deliveries;
   assert.ok(journal.outbox.some(x=>x.intentId===intent.id && x.transport==='tcp' && x.state==='DELIVERED'));
   assert.ok((await api('b','/v1/mesh/deliveries')).deliveries.inbox.some(x=>x.messageType==='PAYMENT_FORWARD' && x.transport==='tcp'));
+  await waitFor(async()=>{
+    const c=(await api('c','/v1/mesh/deliveries')).deliveries.outbox;
+    const d=(await api('d','/v1/mesh/deliveries')).deliveries.outbox;
+    return c.some(x=>x.messageType==='PAYMENT_RECEIPT'&&x.to==='node-d') && d.some(x=>x.messageType==='PAYMENT_RECEIPT'&&x.to==='node-a') && c.some(x=>x.messageType==='HOP_ACCEPTED'&&x.to==='node-d');
+  });
+  await waitFor(async()=>(await api('b','/v1/mesh/messages')).messages.some(x=>x.type==='delivery.hop_accepted'&&x.from==='node-c'));
+});
+test('origin restarts after local submit and later verifies a returning receipt',async()=>{
+  const before=(await api('a','/v1/mesh/node')).peerId;
+  const intent=await api('a','/v1/intents','POST',payment());
+  const submitted=await api('a',`/v1/intents/${intent.id}/execute`,'POST');
+  assert.equal(submitted.state,'queued_for_mesh');
+  stop('a');
+  start('a');
+  await waitFor(async()=>(await api('a','/v1/mesh/node')).peerId===before);
+  const settled=await waitFor(async()=>{const value=await api('a',`/v1/intents/${intent.id}`);return value.state==='settled'?value:null;},30000);
+  assert.equal(settled.receiptVerified,true);
+  assert.equal((await api('c','/v1/transactions')).transactions.filter(x=>x.intentId===intent.id).length,1);
 });
 test('TCP bearer loss leaves A-B libp2p link reachable and payment settles via live bearer',async()=>{
   await api('a','/v1/mesh/transports/tcp','POST',{online:false});
   await waitFor(async()=>(await api('a','/v1/mesh/links')).links.find(l=>l.to==='node-b'&&l.transport==='libp2p')?.online);
   const intent=await api('a','/v1/intents','POST',payment());
-  const result=await api('a',`/v1/intents/${intent.id}/execute`,'POST');
+  const result=await executeAndWait(intent.id);
   assert.equal(result.state,'settled',JSON.stringify(result));
   assert.equal(result.meshPath[0],'node-a'); assert.equal(result.meshPath.at(-1),'node-c');
   assert.equal(result.transportPath[0].transport,'libp2p');
@@ -82,7 +106,7 @@ test('node B failure reroutes through D and preserves one settlement',async()=>{
   stop('b');
   await waitFor(async()=>!(await api('a','/v1/mesh/peers')).peers.find(p=>p.nodeId==='node-b').online,9000);
   const intent=await api('a','/v1/intents','POST',payment());
-  const result=await api('a',`/v1/intents/${intent.id}/execute`,'POST');
+  const result=await executeAndWait(intent.id);
   assert.equal(result.state,'settled',JSON.stringify(result));
   assert.deepEqual(result.meshPath,['node-a','node-d','node-c']);
   assert.deepEqual(result.transportPath.map(e=>e.transport),['libp2p','tcp']);
@@ -109,9 +133,12 @@ test('relay persists a bundle across a broken next hop and forwards after recove
   const intent=await api('a','/v1/intents','POST',payment());
   const queued=await api('a',`/v1/intents/${intent.id}/execute`,'POST');
   assert.equal(queued.state,'queued_for_mesh');
-  await waitFor(async()=>(await api('b','/v1/mesh/queue')).queue.some(x=>x.intentId===intent.id && x.type==='payment'),5000);
-  stop('b'); start('b');
-  await waitFor(async()=>(await api('b','/v1/mesh/queue')).queue.some(x=>x.intentId===intent.id && x.type==='payment'));
+  const relay=await waitFor(async()=>{
+    for(const id of ['b','d']) if((await api(id,'/v1/mesh/queue')).queue.some(x=>x.intentId===intent.id && x.type==='payment')) return id;
+    return null;
+  },10000);
+  stop(relay);start(relay);
+  await waitFor(async()=>(await api(relay,'/v1/mesh/queue')).queue.some(x=>x.intentId===intent.id && x.type==='payment'));
   start('c');
   const settled=await waitFor(async()=>{const value=await api('a',`/v1/intents/${intent.id}`); return value.state==='settled'?value:null;},30000);
   assert.equal(settled.receiptVerified,true);

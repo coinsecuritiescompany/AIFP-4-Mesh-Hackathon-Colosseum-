@@ -103,7 +103,7 @@ export class DeliveryDatabase {
     });
   }
   updateBundle(id,from,to,patch={}) {
-    const nextStates={QUEUED:['WAITING_LINK','SUBMITTED','EXPIRED','FAILED_PERMANENT','DELIVERED'],WAITING_LINK:['QUEUED','SUBMITTED','EXPIRED','FAILED_PERMANENT'],SUBMITTED:['QUEUED','HOP_ACCEPTED','EXPIRED','DELIVERED'],HOP_ACCEPTED:['DELIVERED','EXPIRED'],DELIVERED:[],EXPIRED:[],FAILED_PERMANENT:[]};
+    const nextStates={QUEUED:['WAITING_LINK','SUBMITTED','HOP_ACCEPTED','EXPIRED','FAILED_PERMANENT','DELIVERED'],WAITING_LINK:['QUEUED','SUBMITTED','HOP_ACCEPTED','EXPIRED','FAILED_PERMANENT','DELIVERED'],SUBMITTED:['QUEUED','HOP_ACCEPTED','EXPIRED','DELIVERED','FAILED_PERMANENT'],HOP_ACCEPTED:['DELIVERED','EXPIRED'],DELIVERED:[],EXPIRED:[],FAILED_PERMANENT:[]};
     if(!nextStates[from]?.includes(to)) throw new Error('INVALID_BUNDLE_TRANSITION');
     return this.transaction(()=>{
       const current=this.bundle(id);
@@ -118,7 +118,7 @@ export class DeliveryDatabase {
     return this.transaction(()=>this.db.prepare('INSERT INTO mesh_hops VALUES (?,?,?,?)').run(hop.hopDeliveryId,hop.bundleId,hop.state,JSON.stringify(hop)));
   }
   updateHop(id,from,to,patch={}) {
-    const allowed={READY:['SUBMITTED','FAILED_TEMPORARY','EXPIRED'],SUBMITTED:['HOP_ACCEPTED','FAILED_TEMPORARY','EXPIRED'],FAILED_TEMPORARY:['READY','EXPIRED'],HOP_ACCEPTED:[],EXPIRED:[]};
+    const allowed={READY:['SUBMITTED','HOP_ACCEPTED','FAILED_TEMPORARY','EXPIRED'],SUBMITTED:['HOP_ACCEPTED','FAILED_TEMPORARY','EXPIRED'],FAILED_TEMPORARY:['READY','HOP_ACCEPTED','EXPIRED'],HOP_ACCEPTED:[],EXPIRED:[]};
     if(!allowed[from]?.includes(to)) throw new Error('INVALID_HOP_TRANSITION');
     return this.transaction(()=>{
       const current=this.hop(id);if(!current || current.state!==from) throw new Error('STALE_HOP_STATE');

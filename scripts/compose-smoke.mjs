@@ -14,12 +14,17 @@ async function waitFor(fn,seconds=60) {
   throw new Error(`Timed out: ${last?.message ?? 'condition not met'}`);
 }
 const payment=()=>({agentId:'agent_demo',beneficiary:'ai-data-api',amountMinor:250,asset:'USDC',purpose:'Docker Mesh smoke',idempotencyKey:randomUUID()});
+async function executeAndWait(id) {
+  const submitted=await api(`/v1/intents/${id}/execute`,'POST');
+  assert.ok(['queued_for_mesh','settled'].includes(submitted.state));
+  return waitFor(async()=>{const current=await api(`/v1/intents/${id}`);return current.state==='settled'?current:null;});
+}
 await waitFor(async()=>{
   const {topology}=await api('/v1/mesh/topology');
   return topology.nodes.length>=4 && topology.links.some(e=>e.from==='node-b'&&e.to==='node-c'&&e.transport==='libp2p');
 });
 const first=await api('/v1/intents','POST',payment());
-const settled=await api(`/v1/intents/${first.id}/execute`,'POST');
+const settled=await executeAndWait(first.id);
 assert.equal(settled.state,'settled',JSON.stringify(settled));
 assert.deepEqual(settled.meshPath,['node-a','node-b','node-c']);
 assert.deepEqual(settled.transportPath.map(e=>e.transport),['tcp','libp2p']);
@@ -33,7 +38,7 @@ try {
     return [['node-a','node-d','libp2p'],['node-d','node-c','tcp']].every(([from,to,transport])=>topology.links.some(edge=>edge.from===from&&edge.to===to&&edge.transport===transport));
   });
   const next=await api('/v1/intents','POST',payment());
-  const rerouted=await api(`/v1/intents/${next.id}/execute`,'POST');
+  const rerouted=await executeAndWait(next.id);
   assert.equal(rerouted.state,'settled',JSON.stringify(rerouted));
   assert.deepEqual(rerouted.meshPath,['node-a','node-d','node-c']);
   assert.equal(rerouted.receiptVerified,true);

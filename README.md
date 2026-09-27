@@ -4,7 +4,7 @@
 
 Implementation evidence and external blockers: [status matrix](docs/IMPLEMENTATION_STATUS.md). TCP and libp2p are the tested network links. TCP now fragments oversized envelopes at a configurable frame MTU; tests deliver an actual A→B→C payment at 400-byte TCP MTU and resume incomplete reception after restart. libp2p remains unfragmented. Bluetooth, radio, non-IP satellite, BPv7 and ProSe are not operational. Optional funded Devnet proof: `node scripts/compose-devnet-smoke.mjs` with a disposable pre-funded Devnet payer exported to both the Compose environment and the script environment.
 
-Unacknowledged whole-envelope sends survive a node restart through the outgoing journal and relay queue. Retries use a new signed hop message ID and the settlement node's idempotency state; expired or uncertain payments remain locked. The transport API still uses synchronous request/response, and fragment-level retransmission is future work.
+Payment forwarding now uses per-node SQLite bundles and hop records. TCP and libp2p `submit()` accept work locally; the receiving node verifies and durably records the full signed envelope before issuing a separate signed `HOP_ACCEPTED`. ACKs and settlement receipts can return over another route. Retries sign new hop messages while retaining the original payment identity; expired or uncertain settlements remain locked. Peer discovery still uses a synchronous control exchange. Selective fragment retransmission and generic libp2p framing remain future work.
 
 ## Run the network
 
