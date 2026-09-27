@@ -77,7 +77,11 @@ export class DeliveryDatabase {
     if(!bundle.bundleId || !bundle.intentId || !Number.isFinite(Date.parse(bundle.expiresAt)) || Date.parse(bundle.expiresAt)<=Date.now() || bytes>65536 || !['payment','receipt','ack'].includes(bundle.kind) || bundle.bundleHash!==sha256(bundle.payload) || bundle.state!=='QUEUED') throw new Error('INVALID_BUNDLE');
     const active=this.db.prepare("SELECT COUNT(*) AS count, COALESCE(SUM(bytes),0) AS bytes FROM mesh_bundles WHERE state NOT IN ('DELIVERED','EXPIRED','FAILED_PERMANENT') AND expires_at>?").get(Date.now());
     if(active.count>=64 || active.bytes+bytes>4*1024*1024) throw new Error('MESH_QUEUE_FULL');
-    const perOrigin=this.db.prepare("SELECT COUNT(*) AS count FROM mesh_bundles WHERE json_extract(record,'$.originNodeId')=? AND state NOT IN ('DELIVERED','EXPIRED','FAILED_PERMANENT') AND expires_at>?").get(bundle.originNodeId,Date.now());
+    // Admission reserves space for receipts and ACKs even under an intent
+    // flood. Never accept payment custody that cannot fit its control traffic.
+    const perKind=this.db.prepare("SELECT COUNT(*) AS count FROM mesh_bundles WHERE json_extract(record,'$.kind')=? AND state NOT IN ('DELIVERED','EXPIRED','FAILED_PERMANENT') AND expires_at>?").get(bundle.kind,Date.now());
+    if(perKind.count>={payment:32,receipt:16,ack:16}[bundle.kind]) throw new Error('MESH_QUEUE_FULL');
+    const perOrigin=this.db.prepare("SELECT COUNT(*) AS count FROM mesh_bundles WHERE json_extract(record,'$.originNodeId')=? AND json_extract(record,'$.kind')=? AND state NOT IN ('DELIVERED','EXPIRED','FAILED_PERMANENT') AND expires_at>?").get(bundle.originNodeId,bundle.kind,Date.now());
     if(perOrigin.count>=16) throw new Error('MESH_ORIGIN_QUEUE_FULL');
     this.db.prepare('INSERT INTO mesh_bundles VALUES (?,?,?,?,?,?)').run(bundle.bundleId,bundle.intentId,bundle.state,Date.parse(bundle.expiresAt),bytes,JSON.stringify(bundle));
   }

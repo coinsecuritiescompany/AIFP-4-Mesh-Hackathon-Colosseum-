@@ -63,3 +63,13 @@ test('bundle state and accepted payload survive database reopen',()=>{
     assert.ok(second.seen()['wire-start']);second.close();
   } finally {fs.rmSync(dir,{recursive:true,force:true});}
 });
+test('payment flood reserves durable capacity for ACK and receipt bundles',()=>withDatabase(db=>{
+  for(let i=0;i<32;i++) db.createBundle({...bundle(`payment-${i}`),originNodeId:i<16?'node-a':'node-b'});
+  const overflow={...bundle('payment-overflow'),originNodeId:'node-e'};
+  assert.throws(()=>db.acceptBundle(message('overflow-wire'),{messageId:'overflow-wire'},overflow),/MESH_QUEUE_FULL/);
+  assert.equal(db.seen()['overflow-wire'],undefined);
+  for(let i=0;i<16;i++) db.createBundle({...bundle(`ack-${i}`),kind:'ack',originNodeId:'node-c'});
+  for(let i=0;i<16;i++) db.createBundle({...bundle(`receipt-${i}`),kind:'receipt',originNodeId:'node-d'});
+  assert.equal(db.bundles().length,64);
+  assert.throws(()=>db.createBundle({...bundle('ack-overflow'),kind:'ack',originNodeId:'node-e'}),/MESH_QUEUE_FULL/);
+}));

@@ -58,7 +58,8 @@ export class DeliveryCoordinator {
   async pump() {
     if(this.running) return;this.running=true;
     try {
-      for(const bundle of this.db.bundles(['QUEUED','WAITING_LINK','SUBMITTED','HOP_ACCEPTED'])) {
+      const priority={receipt:0,ack:1,payment:2};
+      for(const bundle of this.db.bundles(['QUEUED','WAITING_LINK','SUBMITTED','HOP_ACCEPTED']).sort((a,b)=>priority[a.kind]-priority[b.kind] || a.createdAt.localeCompare(b.createdAt))) {
         if(Date.parse(bundle.expiresAt)<=Date.now()) {if(bundle.state!=='EXPIRED') this.db.updateBundle(bundle.bundleId,bundle.state,'EXPIRED');continue;}
         if(bundle.state==='HOP_ACCEPTED') continue;
         if(bundle.kind==='payment') {
