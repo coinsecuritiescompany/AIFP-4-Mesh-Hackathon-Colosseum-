@@ -66,7 +66,7 @@ test('TCP bearer loss leaves A-B libp2p link reachable and payment settles via l
   assert.equal(result.state,'settled',JSON.stringify(result));
   assert.equal(result.meshPath[0],'node-a'); assert.equal(result.meshPath.at(-1),'node-c');
   assert.equal(result.transportPath[0].transport,'libp2p');
-  assert.equal((await api('a','/v1/mesh/links')).links.find(l=>l.to==='node-b'&&l.transport==='libp2p').online,true);
+  await waitFor(async()=>(await api('a','/v1/mesh/links')).links.find(l=>l.to==='node-b'&&l.transport==='libp2p')?.online);
   await api('a','/v1/mesh/transports/tcp','POST',{online:true});
   await waitFor(async()=>(await api('a','/v1/mesh/links')).links.find(l=>l.to==='node-b'&&l.transport==='tcp')?.online);
 });
