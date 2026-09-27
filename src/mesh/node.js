@@ -28,7 +28,7 @@ export class MeshNode {
   persist() {
     fs.mkdirSync(this.dataDir,{recursive:true,mode:0o700});
     const tmp=`${this.file}.${process.pid}.tmp`;
-    const {deliveryOutbox,deliveryInbox,...legacyState}=this.state;
+    const {deliveryOutbox,deliveryInbox,seen,...legacyState}=this.state;
     fs.writeFileSync(tmp,JSON.stringify(legacyState),{mode:0o600}); fs.renameSync(tmp,this.file); fs.chmodSync(this.file,0o600);
   }
   event(type, fields={}) { this.state.events.push({ id:randomUUID(), type, nodeId:this.nodeId, timestamp:new Date().toISOString(), ...fields }); this.state.events=this.state.events.slice(-300); this.persist(); }
@@ -139,11 +139,8 @@ export class MeshNode {
     if(transport==='libp2p' && expectedPeerId && remotePeer!==expectedPeerId) throw new Error('LIBP2P_IDENTITY_MISMATCH');
     validateEnvelope(message,this.state.peerKeys[message.sourceNodeId]);
     if(message.destinationNodeId && message.destinationNodeId!==this.nodeId) throw new Error('WRONG_DESTINATION');
-    if(this.state.seen[message.messageId]) throw new Error('REPLAY');
-    this.state.seen[message.messageId]=Date.parse(message.expiresAt);
-    for(const [id,expiry] of Object.entries(this.state.seen)) if(expiry<Date.now()) delete this.state.seen[id];
+    this.deliveries.accept(message,{from:message.sourceNodeId,transport});
     this.state.peerKeys[message.sourceNodeId]=message.publicKey; this.persist();
-    if(message.messageType!=='PEER_HELLO') this.deliveries.incoming(message,{from:message.sourceNodeId,transport});
     if(message.messageType==='PEER_HELLO') {
       this.merge(message.payload?.advertisements);
       return envelope(this.identity,'PEER_HELLO',{advertisements:this.catalog()},{destinationNodeId:message.sourceNodeId});
