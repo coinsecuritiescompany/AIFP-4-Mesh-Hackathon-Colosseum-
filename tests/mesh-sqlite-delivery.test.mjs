@@ -53,3 +53,36 @@ test('node identity and unsent delivery survive JSON-to-SQLite migration and res
   assert.equal(b.state.queuedBundles.length,1);
   b.deliveryDatabase.close();
 }));
+
+test('inbox and replay marker commit together and reject a replay after restart',()=>temp(dir=>{
+  const file=path.join(dir,'delivery.sqlite'),message={messageId:'signed-message',messageType:'PAYMENT_FORWARD',expiresAt:new Date(Date.now()+60000).toISOString()};
+  const first=new DeliveryDatabase(file);
+  const journal=new DeliveryJournal({},()=>{},first);
+  journal.accept(message,{from:'node-a',transport:'tcp'});
+  assert.equal(first.load('inbox')['signed-message'].from,'node-a');
+  assert.ok(first.seen()['signed-message']);
+  first.close();
+  const second=new DeliveryDatabase(file),restarted=new DeliveryJournal({},()=>{},second);
+  assert.throws(()=>restarted.accept(message,{from:'node-a',transport:'libp2p'}),/REPLAY/);
+  assert.equal(restarted.snapshot().inbox.length,1);
+  second.close();
+}));
+
+test('failed inbox write rolls back replay marker and never claims receipt',()=>temp(dir=>{
+  const db=new DeliveryDatabase(path.join(dir,'delivery.sqlite'));
+  const journal=new DeliveryJournal({},()=>{},db);
+  db.db.exec('DROP TABLE delivery_inbox');
+  const message={messageId:'retryable',messageType:'PAYMENT_FORWARD',expiresAt:new Date(Date.now()+60000).toISOString()};
+  assert.throws(()=>journal.accept(message,{from:'node-a',transport:'tcp'}));
+  assert.equal(db.seen().retryable,undefined);
+  assert.equal(journal.state.seen.retryable,undefined);
+  db.close();
+}));
+
+test('pre-migration replay IDs remain blocked after the first database open',()=>temp(dir=>{
+  const file=path.join(dir,'delivery.sqlite'),expiry=Date.now()+60000;
+  const db=new DeliveryDatabase(file,{seen:{already:expiry}});
+  const journal=new DeliveryJournal({},()=>{},db);
+  assert.throws(()=>journal.accept({messageId:'already',messageType:'PEER_HELLO',expiresAt:new Date(expiry).toISOString()},{from:'node-a',transport:'tcp'}),/REPLAY/);
+  db.close();
+}));

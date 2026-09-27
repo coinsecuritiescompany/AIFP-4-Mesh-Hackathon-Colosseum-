@@ -28,6 +28,10 @@ console.log('Docker cross-transport path: A --TCP--> B --libp2p--> C, verified r
 execFileSync('docker',['compose','stop','mesh-node-b'],{stdio:'inherit'});
 try {
   await waitFor(async()=>!(await api('/v1/mesh/peers')).peers.find(p=>p.nodeId==='node-b').online,20);
+  await waitFor(async()=>{
+    const {topology}=await api('/v1/mesh/topology');
+    return [['node-a','node-d','libp2p'],['node-d','node-c','tcp']].every(([from,to,transport])=>topology.links.some(edge=>edge.from===from&&edge.to===to&&edge.transport===transport));
+  });
   const next=await api('/v1/intents','POST',payment());
   const rerouted=await api(`/v1/intents/${next.id}/execute`,'POST');
   assert.equal(rerouted.state,'settled',JSON.stringify(rerouted));

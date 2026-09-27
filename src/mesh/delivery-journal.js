@@ -4,6 +4,7 @@ export class DeliveryJournal {
     this.state=state;this.persist=persist;this.database=database;
     state.deliveryOutbox=database?.load('outbox') ?? state.deliveryOutbox ?? {};
     state.deliveryInbox=database?.load('inbox') ?? state.deliveryInbox ?? {};
+    if(database) state.seen=database.seen();
   }
   #write(kind,id,entry) {
     if(this.database) this.database.transaction(()=>this.database.put(kind,id,entry));
@@ -22,6 +23,15 @@ export class DeliveryJournal {
     if(this.state.deliveryInbox[message.messageId]) throw new Error('DUPLICATE_INBOUND_DELIVERY');
     this.#write('inbox',message.messageId,{messageId:message.messageId,messageType:message.messageType,from,transport,receivedAt:new Date().toISOString()});
     this.#prune();
+  }
+  accept(message,{from,transport}) {
+    if(!this.database) throw new Error('TRANSACTIONAL_INBOX_REQUIRED');
+    const isHello=message.messageType==='PEER_HELLO';
+    const entry=isHello?null:{messageId:message.messageId,messageType:message.messageType,from,transport,receivedAt:new Date().toISOString()};
+    this.database.acceptInbound(message,entry);
+    this.state.seen[message.messageId]=Date.parse(message.expiresAt);
+    for(const [id,expiry] of Object.entries(this.state.seen)) if(expiry<=Date.now()) delete this.state.seen[id];
+    if(entry) {this.state.deliveryInbox[message.messageId]=entry;this.#prune();}
   }
   mark(id,next,reason) {
     if(!STATES.has(next)) throw new Error('INVALID_DELIVERY_STATE');
