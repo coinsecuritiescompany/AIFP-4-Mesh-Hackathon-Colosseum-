@@ -21,7 +21,7 @@ const topology={
   d:[peer('a',{p2p:true,p2pCost:30}),peer('c',{tcp:true,tcpCost:20})]
 };
 function start(id) {
-  const child=spawn(process.execPath,['src/mesh/start.js'],{cwd:process.cwd(),env:{...process.env,MESH_NODE_ID:`node-${id}`,MESH_DATA_DIR:path.join(root,id),MESH_PEERS:JSON.stringify(topology[id]),MESH_SETTLE_MOCK:id==='c'?'true':'false',MESH_TCP_PORT:String(tcp(id)),MESH_P2P_PORT:String(p2p(id)),MESH_P2P_BIND:'127.0.0.1',MESH_TICK_MS:'600',PORT:String(port(id))},stdio:['ignore','pipe','pipe']});
+  const child=spawn(process.execPath,['src/mesh/start.js'],{cwd:process.cwd(),env:{...process.env,MESH_NODE_ID:`node-${id}`,MESH_DATA_DIR:path.join(root,id),MESH_PEERS:JSON.stringify(topology[id]),MESH_SETTLE_MOCK:id==='c'?'true':'false',MESH_TCP_PORT:String(tcp(id)),MESH_TCP_FRAME_MTU:'400',MESH_P2P_PORT:String(p2p(id)),MESH_P2P_BIND:'127.0.0.1',MESH_TICK_MS:'600',PORT:String(port(id))},stdio:['ignore','pipe','pipe']});
   let output=''; for(const stream of [child.stdout,child.stderr]) stream.on('data',chunk=>{output+=chunk.toString();logs.set(id,output.slice(-6000));});
   children.set(id,child);
 }
@@ -45,6 +45,7 @@ test('independent nodes discover signed capabilities and heterogeneous links',as
   await waitFor(async()=>(await api('b','/v1/mesh/links')).links.some(e=>e.to==='node-c'&&e.transport==='libp2p'&&e.online));
   const node=await api('a','/v1/mesh/node'); assert.match(node.peerId,/^12D3/);
   assert.equal(node.canSettle,false);
+  assert.equal(node.transports.find(t=>t.id==='tcp').mtu,400);
 });
 test('A to B by TCP, B to C by libp2p settles and verifies receipt',async()=>{
   const intent=await api('a','/v1/intents','POST',payment());
@@ -53,6 +54,9 @@ test('A to B by TCP, B to C by libp2p settles and verifies receipt',async()=>{
   assert.deepEqual(result.meshPath,['node-a','node-b','node-c']);
   assert.deepEqual(result.transportPath.map(e=>e.transport),['tcp','libp2p']);
   assert.equal(result.receiptVerified,true);
+  const journal=(await api('a','/v1/mesh/deliveries')).deliveries;
+  assert.ok(journal.outbox.some(x=>x.intentId===intent.id && x.transport==='tcp' && x.state==='DELIVERED'));
+  assert.ok((await api('b','/v1/mesh/deliveries')).deliveries.inbox.some(x=>x.messageType==='PAYMENT_FORWARD' && x.transport==='tcp'));
 });
 test('TCP bearer loss leaves A-B libp2p link reachable and payment settles via live bearer',async()=>{
   await api('a','/v1/mesh/transports/tcp','POST',{online:false});

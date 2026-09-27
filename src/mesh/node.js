@@ -8,6 +8,7 @@ import { loadIdentity, verifySigned } from './identity.js';
 import { planRoute, planNodeRoute } from './routing.js';
 import { TcpTransport } from './transports/tcp.js';
 import { Libp2pTransport } from './transports/libp2p.js';
+import { DeliveryJournal } from './delivery-journal.js';
 
 const TTL = 9000;
 export class MeshNode {
@@ -17,9 +18,10 @@ export class MeshNode {
     this.file=path.join(dataDir,'mesh-state.json');
     this.state=fs.existsSync(this.file) ? JSON.parse(fs.readFileSync(this.file,'utf8')) : { peerKeys:{}, advertisements:{}, seen:{}, meshReceipts:{}, sequence:0, events:[] };
     this.state.queuedBundles ??=[];
+    this.deliveries=new DeliveryJournal(this.state,()=>this.persist());
     this.links=new Map(); this.pending=new Map(); this.settling=new Map(); this.busy=false;
     const receive=(message,transport,remotePeer)=>this.receive(message,transport,remotePeer);
-    this.transports=new Map([['tcp',new TcpTransport(tcpPort,receive)],['libp2p',new Libp2pTransport(p2pPort,path.join(dataDir,'libp2p.key'),receive)]]);
+    this.transports=new Map([['tcp',new TcpTransport(tcpPort,receive,{mtu:Number(process.env.MESH_TCP_FRAME_MTU ?? 4096),fragmentFile:path.join(dataDir,'tcp-fragments.json')})],['libp2p',new Libp2pTransport(p2pPort,path.join(dataDir,'libp2p.key'),receive)]]);
   }
   persist() {
     fs.mkdirSync(this.dataDir,{recursive:true,mode:0o700});
@@ -118,6 +120,7 @@ export class MeshNode {
     this.state.seen[message.messageId]=Date.parse(message.expiresAt);
     for(const [id,expiry] of Object.entries(this.state.seen)) if(expiry<Date.now()) delete this.state.seen[id];
     this.state.peerKeys[message.sourceNodeId]=message.publicKey; this.persist();
+    if(message.messageType!=='PEER_HELLO') this.deliveries.incoming(message,{from:message.sourceNodeId,transport});
     if(message.messageType==='PEER_HELLO') {
       this.merge(message.payload?.advertisements);
       return envelope(this.identity,'PEER_HELLO',{advertisements:this.catalog()},{destinationNodeId:message.sourceNodeId});
@@ -217,9 +220,14 @@ export class MeshNode {
       const edge=route.edges[0], peer=this.peers[edge.to];
       if(!peer) { failed.add(edge.to); continue; }
       try {
-        const response=await this.transports.get(edge.transport).send(peer,envelope(this.identity,'PAYMENT_RECEIPT',{receipt,path:trail},{originNodeId:receipt.settlementNodeId,destinationNodeId:edge.to,hopCount:trail.length,maxHops:8}));
+        const outbound=envelope(this.identity,'PAYMENT_RECEIPT',{receipt,path:trail},{originNodeId:receipt.settlementNodeId,destinationNodeId:edge.to,hopCount:trail.length,maxHops:8});
+        this.deliveries.outgoing(outbound,{intentId:receipt.intentId,transport:edge.transport,to:edge.to});
+        this.deliveries.mark(outbound.messageId,'SENDING');
+        const response=await this.transports.get(edge.transport).send(peer,outbound);
+        this.deliveries.mark(outbound.messageId,'SENT');
         validateEnvelope(response,this.state.peerKeys[edge.to]);
         if(response.sourceNodeId!==edge.to || response.messageType!=='PAYMENT_ACK') throw new Error('RECEIPT_NOT_ACKED');
+        this.deliveries.mark(outbound.messageId,'ACKNOWLEDGED');
         this.event('receipt.forwarded',{intentId:receipt.intentId,to:edge.to,transport:edge.transport}); return;
       } catch { failed.add(edge.to); }
     }
@@ -239,7 +247,7 @@ export class MeshNode {
     intent.receipt=receipt; intent.state='settled'; intent.meshPath=receipt.meshPath; intent.transportPath=receipt.transportPath; intent.receiptVerified=true;
     this.service.store.add('receipts',receipt);
     this.service.store.add('transactions',{id:randomUUID(),intentId:intent.id,agentId:intent.agentId,beneficiary:intent.beneficiary,amountMinor:intent.amountMinor,asset:intent.asset,rail:receipt.rail,state:'settled',reference:receipt.executionReference,createdAt:receipt.settledAt});
-    this.service.store.save(intent); this.event('receipt.received',{intentId:intent.id,settlementNodeId:receipt.settlementNodeId}); return intent;
+    this.service.store.save(intent); this.deliveries.deliveredIntent(intent.id); this.event('receipt.received',{intentId:intent.id,settlementNodeId:receipt.settlementNodeId}); return intent;
   }
   async forward(payload) {
     const excluded=[...payload.path.slice(0,-1)];
@@ -252,10 +260,16 @@ export class MeshNode {
       const outbound={...payload,transportPath:[...payload.transportPath,{from:this.nodeId,to:edge.to,transport:edge.transport}]};
       try {
         this.event('bundle.forwarded',{intentId:payload.intent.id,to:edge.to,transport:edge.transport});
-        const response=await this.transports.get(edge.transport).send(peer,envelope(this.identity,'PAYMENT_FORWARD',outbound,{originNodeId:payload.originNodeId,destinationNodeId:edge.to,hopCount:payload.path.length,maxHops:8,expiresAt:payload.intent.expiresAt}));
+        const outgoing=envelope(this.identity,'PAYMENT_FORWARD',outbound,{originNodeId:payload.originNodeId,destinationNodeId:edge.to,hopCount:payload.path.length,maxHops:8,expiresAt:payload.intent.expiresAt});
+        this.deliveries.outgoing(outgoing,{intentId:payload.intent.id,transport:edge.transport,to:edge.to});
+        this.deliveries.mark(outgoing.messageId,'SENDING');
+        let response;
+        try { response=await this.transports.get(edge.transport).send(peer,outgoing); this.deliveries.mark(outgoing.messageId,'SENT'); }
+        catch(error) {this.deliveries.mark(outgoing.messageId,'FAILED_TEMPORARY',error.message);throw error;}
         validateEnvelope(response,this.state.peerKeys[edge.to]);
         if(response.sourceNodeId!==edge.to) throw new Error('PEER_MISMATCH');
-        if(response.messageType==='PAYMENT_RECEIPT') return response.payload.receipt;
+        if(response.messageType==='PAYMENT_RECEIPT') {this.deliveries.mark(outgoing.messageId,'ACKNOWLEDGED');return response.payload.receipt;}
+        if(response.messageType==='PAYMENT_ACK') this.deliveries.mark(outgoing.messageId,'ACKNOWLEDGED');
         if(response.payload?.code==='EXECUTION_UNCERTAIN') throw new Error('EXECUTION_UNCERTAIN');
         throw new Error(response.payload?.code ?? 'PAYMENT_FAILED');
       } catch(error) {
@@ -286,5 +300,5 @@ export class MeshNode {
       return intent;
     }
   }
-  snapshot() { return {node:{...this.capability(),transports:[...this.transports.values()].map(t=>t.health())},peers:Object.values(this.peers).map(p=>({nodeId:p.id,publicKey:this.state.peerKeys[p.id] ?? null,online:[...this.links.values()].some(l=>l.to===p.id && l.online)})),links:[...this.links.values()],routes:this.catalog().map(a=>a.data),topology:{nodes:this.catalog().map(a=>({nodeId:a.data.nodeId,canSettle:a.data.canSettle,assets:a.data.assets,rails:a.data.rails,peerId:a.data.peerId})),links:this.graph()},queue:[...this.service.store.all('intents').filter(i=>i.state==='queued_for_mesh').map(i=>({id:i.id,asset:i.asset,expiresAt:i.expiresAt})),...this.state.queuedBundles.map(b=>({id:b.id,intentId:b.intentId,type:b.type,expiresAt:b.expiresAt}))],messages:this.state.events.slice(-100)}; }
+  snapshot() { return {node:{...this.capability(),transports:[...this.transports.values()].map(t=>t.health())},peers:Object.values(this.peers).map(p=>({nodeId:p.id,publicKey:this.state.peerKeys[p.id] ?? null,online:[...this.links.values()].some(l=>l.to===p.id && l.online)})),links:[...this.links.values()],routes:this.catalog().map(a=>a.data),topology:{nodes:this.catalog().map(a=>({nodeId:a.data.nodeId,canSettle:a.data.canSettle,assets:a.data.assets,rails:a.data.rails,peerId:a.data.peerId})),links:this.graph()},queue:[...this.service.store.all('intents').filter(i=>i.state==='queued_for_mesh').map(i=>({id:i.id,asset:i.asset,expiresAt:i.expiresAt})),...this.state.queuedBundles.map(b=>({id:b.id,intentId:b.intentId,type:b.type,expiresAt:b.expiresAt}))],messages:this.state.events.slice(-100),deliveries:this.deliveries.snapshot()}; }
 }

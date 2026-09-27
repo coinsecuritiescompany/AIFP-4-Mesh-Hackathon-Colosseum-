@@ -80,6 +80,11 @@ paths:
     get:
       responses:
         '200': {description: Recent local relay and receipt events}
+  /v1/mesh/deliveries:
+    get:
+      summary: Persistent local incoming and outgoing per-hop delivery journal
+      responses:
+        '200': {description: Last 100 inbound/outbound records; transport ACK and settlement are separate states}
   /v1/agents:
     get:
       responses:

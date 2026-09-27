@@ -49,11 +49,11 @@ export function createServer({ service, apiKey, mesh = null }) {
       if (method === 'GET' && p === '/v1/routes') return send(res, 200, { routes: service.listRoutes({ asset: url.searchParams.get('asset') ?? undefined }) });
       if (method === 'POST' && p === '/v1/mesh/network') { const data = await readJson(req); if (typeof data.online !== 'boolean') return send(res, 422, { error: 'INVALID_INPUT', requestId }); return send(res, 200, { routes: service.setMockOnline(data.online) }); }
       if (method === 'POST' && p === '/v1/mesh/reconcile') {
-        if (mesh) { await mesh.tick(); return send(res, 200, { reconciled: await Promise.all(mesh.snapshot().queue.map(i=>mesh.dispatch(i.id))) }); }
+        if (mesh) { await mesh.tick(); return send(res, 200, { reconciled: await Promise.all(service.store.all('intents').filter(i=>i.state==='queued_for_mesh').map(i=>mesh.dispatch(i.id))) }); }
         return send(res, 200, { reconciled: await service.reconcileQueued() });
       }
       if (mesh && method === 'GET' && p === '/v1/mesh/node') return send(res, 200, mesh.snapshot().node);
-      if (mesh && method === 'GET' && ['/v1/mesh/peers','/v1/mesh/links','/v1/mesh/routes','/v1/mesh/topology','/v1/mesh/transports','/v1/mesh/queue','/v1/mesh/messages'].includes(p)) {
+      if (mesh && method === 'GET' && ['/v1/mesh/peers','/v1/mesh/links','/v1/mesh/routes','/v1/mesh/topology','/v1/mesh/transports','/v1/mesh/queue','/v1/mesh/messages','/v1/mesh/deliveries'].includes(p)) {
         const key=p.split('/').at(-1), snapshot=mesh.snapshot();
         return send(res, 200, { [key]: key==='transports'?snapshot.node.transports:snapshot[key] });
       }
