@@ -33,4 +33,5 @@ export class Libp2pTransport {
     try { stream.send(wireEncode(message)); await stream.close(); return await read(stream); } catch(error) { stream.abort(error); throw error; }
   }
   health() { return { id:this.id, type:'libp2p', online:Boolean(this.node?.status==='started'), peerId:this.peerId, mtu:65536, security:'Noise', implementationStatus:'TESTED_SOFTWARE' }; }
+  capabilities() { return {transportId:this.id,transportType:'libp2p',implementationStatus:'IMPLEMENTED_AND_TESTED',online:Boolean(this.node?.status==='started'),mtu:65536,maxPayload:65536,latencyClass:'low',estimatedLatencyMs:null,estimatedBandwidth:null,reliability:null,metered:false,costWeight:1,energyCost:null,supportsDiscovery:true,supportsBroadcast:false,supportsDirectPeer:true,supportsAcknowledgement:true,supportsFragmentation:false,supportsStoreForward:false,securityProperties:{encrypted:true,authenticatedBy:'Noise-peer-id-and-signed-mesh-envelope'}}; }
 }

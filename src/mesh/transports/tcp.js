@@ -37,4 +37,5 @@ export class TcpTransport {
     });
   }
   health() { return { id:this.id, type:'tcp', online:Boolean(this.server?.listening), mtu:65536, implementationStatus:'TESTED_SOFTWARE' }; }
+  capabilities() { return {transportId:this.id,transportType:'tcp',implementationStatus:'IMPLEMENTED_AND_TESTED',online:Boolean(this.server?.listening),mtu:65536,maxPayload:65536,latencyClass:'low',estimatedLatencyMs:null,estimatedBandwidth:null,reliability:null,metered:false,costWeight:1,energyCost:null,supportsDiscovery:false,supportsBroadcast:false,supportsDirectPeer:true,supportsAcknowledgement:true,supportsFragmentation:false,supportsStoreForward:false,securityProperties:{encrypted:false,authenticatedBy:'signed-mesh-envelope'}}; }
 }
