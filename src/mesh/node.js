@@ -62,10 +62,29 @@ export class MeshNode {
   async start() {
     for(const adapter of this.transports.values()) await adapter.start();
     this.advertise();
+    this.recoverOutbox();
     await this.tick();
     this.timer=setInterval(()=>this.tick().catch(()=>{}),this.tickMs);
   }
   async stop() { clearInterval(this.timer); for(const adapter of this.transports.values()) await adapter.stop(); }
+  recoverOutbox(startup=true) {
+    for(const item of this.deliveries.pendingRecovery().filter(x=>startup || x.state==='FAILED_TEMPORARY')) {
+      if(Date.parse(item.expiresAt)<=Date.now()) {this.deliveries.mark(item.messageId,'EXPIRED');continue;}
+      try {
+        const {type,payload}=item.recovery;
+        if(type==='payment' && payload.originNodeId===this.nodeId) {
+          const intent=this.service.store.get(item.intentId);
+          if(!intent || ['settled','executing','expired'].includes(intent.state)) {this.deliveries.mark(item.messageId,intent?.state==='settled'?'DELIVERED':'FAILED_PERMANENT');continue;}
+          intent.state='queued_for_mesh';this.service.store.save(intent);
+        } else if(type==='payment' || type==='receipt') this.queueBundle(type,payload,item.expiresAt,item.intentId);
+        else throw new Error('INVALID_OUTBOX_RECOVERY');
+        this.deliveries.mark(item.messageId,'QUEUED');
+        // The queue/intent is durable. A retry constructs a fresh signed hop
+        // envelope so a lost ACK cannot bypass the receiver's replay cache.
+        delete this.state.deliveryOutbox[item.messageId].recovery;this.persist();
+      } catch(error) {this.event('route.failed',{intentId:item.intentId,reason:error.message});}
+    }
+  }
   async setTransportOnline(id, online) {
     if(id!=='tcp' || typeof online!=='boolean') throw new Error('INVALID_TRANSPORT');
     await this.transports.get(id).setOnline(online);
@@ -93,6 +112,7 @@ export class MeshNode {
         }
       }
       this.advertise();
+      this.recoverOutbox(false);
       for(const intent of this.service.store.all('intents').filter(i=>i.state==='queued_for_mesh')) await this.dispatch(intent.id).catch(()=>{});
       for(const item of [...this.state.queuedBundles].sort((a,b)=>(b.priority??0)-(a.priority??0) || a.nextAttempt-b.nextAttempt)) {
         if(Date.parse(item.expiresAt)<=Date.now()) { this.state.queuedBundles=this.state.queuedBundles.filter(x=>x.id!==item.id); this.event('bundle.expired',{intentId:item.intentId}); continue; }
@@ -219,17 +239,23 @@ export class MeshNode {
       if(!route?.edges.length) throw new Error('NO_RECEIPT_ROUTE');
       const edge=route.edges[0], peer=this.peers[edge.to];
       if(!peer) { failed.add(edge.to); continue; }
+      let outbound;
       try {
-        const outbound=envelope(this.identity,'PAYMENT_RECEIPT',{receipt,path:trail},{originNodeId:receipt.settlementNodeId,destinationNodeId:edge.to,hopCount:trail.length,maxHops:8});
-        this.deliveries.outgoing(outbound,{intentId:receipt.intentId,transport:edge.transport,to:edge.to});
+        outbound=envelope(this.identity,'PAYMENT_RECEIPT',{receipt,path:trail},{originNodeId:receipt.settlementNodeId,destinationNodeId:edge.to,hopCount:trail.length,maxHops:8});
+        this.deliveries.outgoing(outbound,{intentId:receipt.intentId,transport:edge.transport,to:edge.to,recovery:{type:'receipt',payload}});
         this.deliveries.mark(outbound.messageId,'SENDING');
-        const response=await this.transports.get(edge.transport).send(peer,outbound);
+        let response;
+        try {response=await this.transports.get(edge.transport).send(peer,outbound);}
+        catch(error) {this.deliveries.mark(outbound.messageId,'FAILED_TEMPORARY',error.message);throw error;}
         this.deliveries.mark(outbound.messageId,'SENT');
         validateEnvelope(response,this.state.peerKeys[edge.to]);
         if(response.sourceNodeId!==edge.to || response.messageType!=='PAYMENT_ACK') throw new Error('RECEIPT_NOT_ACKED');
         this.deliveries.mark(outbound.messageId,'ACKNOWLEDGED');
         this.event('receipt.forwarded',{intentId:receipt.intentId,to:edge.to,transport:edge.transport}); return;
-      } catch { failed.add(edge.to); }
+      } catch(error) {
+        if(outbound && this.state.deliveryOutbox[outbound.messageId]?.recovery) this.deliveries.mark(outbound.messageId,'FAILED_TEMPORARY',error.message);
+        failed.add(edge.to);
+      }
     }
   }
   verifyReceipt(receipt,intent) {
@@ -261,7 +287,7 @@ export class MeshNode {
       try {
         this.event('bundle.forwarded',{intentId:payload.intent.id,to:edge.to,transport:edge.transport});
         const outgoing=envelope(this.identity,'PAYMENT_FORWARD',outbound,{originNodeId:payload.originNodeId,destinationNodeId:edge.to,hopCount:payload.path.length,maxHops:8,expiresAt:payload.intent.expiresAt});
-        this.deliveries.outgoing(outgoing,{intentId:payload.intent.id,transport:edge.transport,to:edge.to});
+        this.deliveries.outgoing(outgoing,{intentId:payload.intent.id,transport:edge.transport,to:edge.to,recovery:{type:'payment',payload}});
         this.deliveries.mark(outgoing.messageId,'SENDING');
         let response;
         try { response=await this.transports.get(edge.transport).send(peer,outgoing); this.deliveries.mark(outgoing.messageId,'SENT'); }

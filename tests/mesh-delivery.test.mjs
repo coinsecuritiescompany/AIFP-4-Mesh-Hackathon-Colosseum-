@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DeliveryJournal } from '../src/mesh/delivery-journal.js';
+import { MeshNode } from '../src/mesh/node.js';
 
 test('persistent delivery journal separates peer acknowledgement from verified settlement',()=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'aifp-delivery-')), file=path.join(dir,'journal.json');
@@ -20,5 +21,40 @@ test('persistent delivery journal separates peer acknowledgement from verified s
     assert.equal(restored.snapshot().outbox[0].state,'DELIVERED');
     assert.equal(restored.mark(message.messageId,'SENT').state,'DELIVERED');
     assert.throws(()=>restored.incoming({...message,messageId:'receipt-1'},{from:'node-c',transport:'libp2p'}),/DUPLICATE_INBOUND/);
+  } finally {fs.rmSync(dir,{recursive:true,force:true});}
+});
+test('relay recovers an uncertain outgoing payment after restart without exposing payload in API',()=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'aifp-outbox-recover-'));
+  const service={routes:[],adapters:new Map(),store:{get:()=>null,all:()=>[]}};
+  try {
+    const before=new MeshNode({nodeId:'node-b',dataDir:dir,peers:{},service});
+    const expiresAt=new Date(Date.now()+60000).toISOString();
+    const payload={originNodeId:'node-a',intent:{id:'intent-1',expiresAt},path:['node-a','node-b'],transportPath:[{from:'node-a',to:'node-b',transport:'tcp'}]};
+    before.deliveries.outgoing({messageId:'message-2',messageType:'PAYMENT_FORWARD',createdAt:new Date().toISOString(),expiresAt},{intentId:'intent-1',transport:'libp2p',to:'node-c',recovery:{type:'payment',payload}});
+    before.deliveries.mark('message-2','SENDING');
+    const after=new MeshNode({nodeId:'node-b',dataDir:dir,peers:{},service});
+    after.recoverOutbox();
+    assert.equal(after.state.queuedBundles.length,1);
+    assert.deepEqual(after.state.queuedBundles[0].payload,payload);
+    assert.equal(after.deliveries.snapshot().outbox[0].state,'QUEUED');
+    assert.equal(JSON.stringify(after.deliveries.snapshot()).includes('originNodeId'),false);
+    after.recoverOutbox();assert.equal(after.state.queuedBundles.length,1);
+    assert.equal(after.deliveries.pendingRecovery().length,0);
+  } finally {fs.rmSync(dir,{recursive:true,force:true});}
+});
+test('outbox restart never retries an expired message or an uncertain settlement',()=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'aifp-outbox-expired-'));
+  const intent={id:'intent-expiring',state:'executing'};
+  const service={routes:[],adapters:new Map(),store:{get:()=>intent,all:()=>[]}};
+  try {
+    const before=new MeshNode({nodeId:'node-a',dataDir:dir,peers:{},service});
+    const expired=new Date(Date.now()-1000).toISOString();
+    before.deliveries.outgoing({messageId:'expired-message',messageType:'PAYMENT_FORWARD',createdAt:expired,expiresAt:expired},{intentId:intent.id,transport:'tcp',to:'node-b',recovery:{type:'payment',payload:{originNodeId:'node-a',intent}}});
+    before.deliveries.outgoing({messageId:'uncertain-message',messageType:'PAYMENT_FORWARD',createdAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60000).toISOString()},{intentId:intent.id,transport:'tcp',to:'node-b',recovery:{type:'payment',payload:{originNodeId:'node-a',intent}}});
+    const after=new MeshNode({nodeId:'node-a',dataDir:dir,peers:{},service});
+    after.recoverOutbox();
+    assert.deepEqual(after.deliveries.snapshot().outbox.map(x=>x.state),['EXPIRED','FAILED_PERMANENT']);
+    assert.equal(after.state.queuedBundles.length,0);
+    assert.equal(intent.state,'executing');
   } finally {fs.rmSync(dir,{recursive:true,force:true});}
 });
