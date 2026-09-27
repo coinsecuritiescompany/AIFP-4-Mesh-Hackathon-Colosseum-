@@ -29,19 +29,21 @@ test('TCP submit returns local acceptance before delayed application processing;
 test('libp2p submit uses a separate one-way Noise/Yamux stream without remote payment response',async()=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'aifp-async-p2p-'));
   const port=30000+randomInt(10000);
-  const a=new Libp2pTransport(port,path.join(dir,'a.key'),()=>{throw new Error('legacy path called');});
-  const b=new Libp2pTransport(port+1,path.join(dir,'b.key'),()=>{throw new Error('legacy path called');});
+  const a=new Libp2pTransport(port,path.join(dir,'a.key'),()=>{throw new Error('legacy path called');},{mtu:400});
+  const b=new Libp2pTransport(port+1,path.join(dir,'b.key'),()=>{throw new Error('legacy path called');},{mtu:400,fragmentFile:path.join(dir,'b-fragments.json')});
   let finish,arrived;
   const gate=new Promise(resolve=>{finish=resolve;});
   const delivered=new Promise(resolve=>{arrived=resolve;});
   b.onMessage(async(bytes,metadata)=>{arrived({bytes,metadata});await gate;});
   try {
     await Promise.all([a.start(),b.start()]);
-    const payload=wireEncode({message:'one-way delivery'});
+    const payload=wireEncode({message:'one-way delivery'.repeat(300)});
     const submission=await a.submit({id:'node-b',p2p:`/ip4/127.0.0.1/tcp/${port+1}`},payload);
     assert.equal(submission.state,'ACCEPTED_LOCAL');
     const received=await delivered;
     assert.deepEqual(received.bytes,payload);
     assert.equal(received.metadata.remotePeer,a.peerId);
+    assert.equal(b.capabilities().supportsFragmentation,true);
+    assert.equal(b.health().mtu,400);
   } finally {finish();await Promise.all([a.stop(),b.stop()]);fs.rmSync(dir,{recursive:true,force:true});}
 });
