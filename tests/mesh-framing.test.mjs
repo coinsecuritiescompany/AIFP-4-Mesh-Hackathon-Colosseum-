@@ -55,7 +55,7 @@ test('real software transports expose independent link capabilities without clai
   const p2p=new Libp2pTransport(0,'/unused',()=>{}).capabilities();
   for(const adapter of [tcp,p2p]) {
     assert.equal(adapter.implementationStatus,'IMPLEMENTED_AND_TESTED');
-    assert.equal(adapter.supportsFragmentation,false);
+    assert.equal(adapter.supportsFragmentation,adapter.transportId==='tcp');
     assert.equal(adapter.supportsDirectPeer,true);
     assert.ok(adapter.maxPayload>0);
   }
