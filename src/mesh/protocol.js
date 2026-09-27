@@ -4,7 +4,7 @@ import { sha256 } from '../canonical.js';
 import { verifySigned } from './identity.js';
 
 export const VERSION = '/aifp4/mesh/1.0.0';
-export const TYPES = new Set(['PEER_HELLO','PEER_CAPABILITIES','LINK_STATE','ROUTE_ADVERTISEMENT','ROUTE_WITHDRAWAL','PAYMENT_INTENT','PAYMENT_FORWARD','PAYMENT_ACK','PAYMENT_RECEIPT','PAYMENT_FAILED','PING','PONG','RECONCILE_REQUEST','RECONCILE_RESPONSE','TRANSPORT_UP','TRANSPORT_DOWN']);
+export const TYPES = new Set(['PEER_HELLO','PEER_CAPABILITIES','LINK_STATE','ROUTE_ADVERTISEMENT','ROUTE_WITHDRAWAL','PAYMENT_INTENT','PAYMENT_FORWARD','PAYMENT_ACK','PAYMENT_RECEIPT','PAYMENT_FAILED','HOP_ACCEPTED','PING','PONG','RECONCILE_REQUEST','RECONCILE_RESPONSE','TRANSPORT_UP','TRANSPORT_DOWN']);
 export function envelope(identity, type, payload, fields = {}) {
   if (!TYPES.has(type)) throw new Error('Unknown message type');
   const body = { protocolVersion: VERSION, messageId: randomUUID(), messageType: type, sourceNodeId: identity.nodeId, originNodeId: fields.originNodeId ?? identity.nodeId, destinationNodeId: fields.destinationNodeId ?? '', createdAt: new Date().toISOString(), expiresAt: fields.expiresAt ?? new Date(Date.now() + 60000).toISOString(), hopCount: fields.hopCount ?? 0, maxHops: fields.maxHops ?? 8, previousHop: fields.previousHop ?? '', payloadType: 'application/aifp4+cbor', payloadHash: sha256(payload), payload, publicKey: identity.publicKey };
