@@ -1,4 +1,5 @@
 import net from 'node:net';
+import { randomUUID } from 'node:crypto';
 import { wireEncode, wireDecode } from '../protocol.js';
 import { fragmentEnvelope, encodeFragment, decodeFragment } from '../framing/fragmenter.js';
 import { Reassembler } from '../framing/reassembler.js';
@@ -53,12 +54,19 @@ function attach(socket, receive, reject, reassembler) {
 export class TcpTransport {
   constructor(port, receive, {mtu=4096, fragmentFile=null}={}) {
     if(!Number.isInteger(mtu) || mtu<256 || mtu>MAX_WIRE) throw new Error('INVALID_TCP_MTU');
-    this.id='tcp'; this.port=port; this.receive=receive; this.server=null; this.enabled=true; this.mtu=mtu;
+    this.id='tcp'; this.port=port; this.receive=receive; this.server=null; this.enabled=true; this.mtu=mtu;this.messageHandler=null;
     this.reassembler=new Reassembler(fragmentFile);
   }
   async start() {
     this.server=net.createServer({allowHalfOpen:true},socket=>{
       attach(socket,async request=>{
+        if(request?.transportMode==='async-v1') {
+          if(!this.messageHandler || !(request.payload instanceof Uint8Array) || request.payload.length>MAX_WIRE) {socket.destroy();return;}
+          const payload=Buffer.from(request.payload),metadata={transportId:this.id,remoteAddress:socket.remoteAddress};
+          socket.end();
+          queueMicrotask(()=>Promise.resolve().then(()=>this.messageHandler(payload,metadata)).catch(()=>{}));
+          return;
+        }
         try { writeMessage(socket,await this.receive(request,'tcp'),this.mtu); socket.end(); }
         catch {socket.destroy();}
       },()=>socket.destroy(),this.reassembler);
@@ -68,6 +76,23 @@ export class TcpTransport {
   }
   async stop() {if(this.server?.listening) await new Promise(resolve=>this.server.close(resolve)); this.server=null;}
   async setOnline(online) {this.enabled=online;if(online&&!this.server?.listening) await this.start();if(!online) await this.stop();}
+  onMessage(handler) {if(typeof handler!=='function') throw new Error('INVALID_MESSAGE_HANDLER');this.messageHandler=handler;}
+  async submit(peer,payload,{messageId=randomUUID(),expiresAt=new Date(Date.now()+60000).toISOString()}={}) {
+    if(!this.enabled||!peer.tcp) throw new Error('TCP_NOT_CONFIGURED');
+    if(!(payload instanceof Uint8Array) || payload.length>MAX_WIRE) throw new Error('INVALID_TRANSPORT_PAYLOAD');
+    const wrapper={transportMode:'async-v1',messageId,expiresAt,payload:Buffer.from(payload)};
+    const frames=packets(wrapper,this.mtu).map(frame);
+    return new Promise((resolve,reject)=>{
+      const socket=net.connect(peer.tcp.port,peer.tcp.host);
+      let finished=false;
+      const fail=error=>{if(!finished){finished=true;socket.destroy();reject(error);}};
+      socket.once('error',fail);
+      socket.once('connect',()=>{
+        for(const bytes of frames) socket.write(bytes);
+        socket.end(()=>{if(!finished){finished=true;resolve({submissionId:randomUUID(),transportId:this.id,peerId:peer.id,acceptedAt:new Date().toISOString(),state:'ACCEPTED_LOCAL'});}});
+      });
+    });
+  }
   async send(peer,message) {
     if(!this.enabled||!peer.tcp) throw new Error('TCP_NOT_CONFIGURED');
     return new Promise((resolve,reject)=>{
