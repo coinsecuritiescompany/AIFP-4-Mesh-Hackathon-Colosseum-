@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: AIFP-4 Mesh Sandbox API
-  version: 0.2.0
-  description: Local sandbox agent payments. Solana Devnet proof is a separate CLI flow.
+  version: 0.3.0
+  description: Local multi-node Mesh sandbox. Mock USDC is the default rail; real SOL Devnet is optional on settlement node C.
 servers:
   - url: http://localhost:4044
 security:
@@ -37,6 +37,49 @@ paths:
     post:
       responses:
         '200': {description: Reconciled queued intents}
+  /v1/mesh/node:
+    get:
+      summary: Local public node identity, capabilities and transport health
+      responses:
+        '200': {description: Node, content: {application/json: {schema: {$ref: '#/components/schemas/MeshNode'}}}}
+  /v1/mesh/peers:
+    get:
+      responses:
+        '200': {description: Direct peer registry and online state}
+  /v1/mesh/links:
+    get:
+      responses:
+        '200': {description: Measured local links, content: {application/json: {schema: {type: object, properties: {links: {type: array, items: {$ref: '#/components/schemas/MeshLink'}}}}}}}
+  /v1/mesh/routes:
+    get:
+      responses:
+        '200': {description: Signed route advertisements learned through peers}
+  /v1/mesh/topology:
+    get:
+      responses:
+        '200': {description: Current advertised network nodes and transport-specific edges}
+  /v1/mesh/transports:
+    get:
+      responses:
+        '200': {description: Local installed software transports and live health}
+  /v1/mesh/transports/tcp:
+    post:
+      summary: Stop or restart local TCP bearer for sandbox fault testing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, required: [online], properties: {online: {type: boolean}}}
+      responses:
+        '200': {description: Updated TCP adapter health}
+  /v1/mesh/queue:
+    get:
+      responses:
+        '200': {description: Persisted origin intents awaiting a Mesh route}
+  /v1/mesh/messages:
+    get:
+      responses:
+        '200': {description: Recent local relay and receipt events}
   /v1/agents:
     get:
       responses:
@@ -105,6 +148,13 @@ paths:
         - {$ref: '#/components/parameters/Id'}
       responses:
         '200': {description: Settled or queued intent}
+  /v1/intents/{id}/path:
+    get:
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+      responses:
+        '200': {description: Actual node path, transport path and origin receipt verification}
+        '404': {description: Intent not found}
   /v1/transactions:
     get:
       responses:
@@ -118,7 +168,7 @@ paths:
       parameters:
         - {$ref: '#/components/parameters/Id'}
       responses:
-        '200': {description: Receipt detail}
+        '200': {description: Signed Mesh receipt on a Mesh node, content: {application/json: {schema: {$ref: '#/components/schemas/MeshReceipt'}}}}
         '404': {description: Not found}
 components:
   parameters:
@@ -126,6 +176,51 @@ components:
   securitySchemes:
     ApiKeyAuth: {type: apiKey, in: header, name: x-aifp4-api-key}
   schemas:
+    MeshLink:
+      type: object
+      required: [from, to, transport, online, cost]
+      properties:
+        from: {type: string}
+        to: {type: string}
+        transport: {type: string, enum: [tcp, libp2p]}
+        online: {type: boolean}
+        cost: {type: number}
+        latencyMs: {type: number}
+        reliability: {type: number}
+    MeshHop:
+      type: object
+      required: [from, to, transport]
+      properties:
+        from: {type: string}
+        to: {type: string}
+        transport: {type: string, enum: [tcp, libp2p]}
+    MeshNode:
+      type: object
+      required: [nodeId, publicKey, peerId, canRelay, canSettle, assets, rails, transports]
+      properties:
+        nodeId: {type: string}
+        publicKey: {type: string, description: Public Ed25519 key; private keys are never returned}
+        peerId: {type: string}
+        canRelay: {type: boolean}
+        canSettle: {type: boolean}
+        assets: {type: array, items: {type: string}}
+        rails: {type: array, items: {type: string}}
+        transports: {type: array, items: {type: object}}
+    MeshReceipt:
+      type: object
+      required: [receiptId, intentId, intentHash, originNodeId, settlementNodeId, meshPath, transportPath, receiptHash, settlementNodeSignature]
+      properties:
+        receiptId: {type: string}
+        intentId: {type: string}
+        intentHash: {type: string}
+        originNodeId: {type: string}
+        settlementNodeId: {type: string}
+        meshPath: {type: array, items: {type: string}}
+        transportPath: {type: array, items: {$ref: '#/components/schemas/MeshHop'}}
+        rail: {type: string}
+        executionReference: {type: string}
+        receiptHash: {type: string}
+        settlementNodeSignature: {type: string}
     CreateIntent:
       type: object
       required: [idempotencyKey, agentId, beneficiary, amountMinor, asset, purpose]

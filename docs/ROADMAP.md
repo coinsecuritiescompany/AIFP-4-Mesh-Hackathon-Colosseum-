@@ -1,22 +1,7 @@
-# MVP -> Production Roadmap
+# Roadmap
 
-## Hackathon MVP
+**Now, tested in the MVP:** five independent local nodes, signed advertisements and payment envelopes, CBOR over TCP and libp2p, weighted multi-hop routing, automatic node/transport failover, origin-side persistent queue, mock USDC settlement, signed receipt verification, Docker smoke test. A Devnet SOL rail can be enabled with a separate disposable payer on C, but was not exercised with a funded payer in automated tests.
 
-- Deterministic and idempotent payment intents
-- Delegated spend-policy checks
-- Fee/latency-aware route ranking
-- Offline queue and reconciliation
-- Mock settlement
-- Solana Devnet settlement proof
-- OpenAPI contract and CI
+**Next engineering gates:** formal node enrollment/key pinning, persistent per-relay bundles and asynchronous receipt forwarding, independent settlement uncertainty resolver, SQLite or transactional storage, bounded backoff and per-peer quotas, signature/transport path attestation, full replay/chaos coverage, durable audit export, accessibility and browser E2E tests.
 
-## Production hardening
-
-- PostgreSQL event store and replay
-- Ed25519 intent signatures and Agent Passport binding
-- KMS/HSM-managed signing keys
-- Solana stablecoin adapters
-- Signed peer-to-peer mesh discovery
-- Retry, dead-letter and reconciliation semantics
-- Rate limiting, observability, audit export and incident controls
-- Additional payment-rail adapters through eligible regulated partners
+**Later integrations:** COSE structures, BPv7/BPSec/TCPCLv4 through a tested standards implementation if interoperability is needed, real Bluetooth/ProSe/radio/satellite adapters on hardware, Solana token rail and qualified fiat/card providers. None of these future transports are currently online.

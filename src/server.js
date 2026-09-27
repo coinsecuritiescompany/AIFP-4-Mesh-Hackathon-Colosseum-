@@ -22,7 +22,7 @@ function authorized(candidate, expected) {
   const a = Buffer.from(candidate), b = Buffer.from(expected);
   return a.length === b.length && timingSafeEqual(a, b);
 }
-export function createServer({ service, apiKey }) {
+export function createServer({ service, apiKey, mesh = null }) {
   const root = path.resolve('public');
   const attempts = new Map();
   return http.createServer(async (req, res) => {
@@ -33,7 +33,7 @@ export function createServer({ service, apiKey }) {
         const file = path.join(root, p === '/' ? 'index.html' : p.slice(1));
         return send(res, 200, fs.readFileSync(file, 'utf8'), types[path.extname(file)]);
       }
-      if (p === '/health' && method === 'GET') return send(res, 200, { ok: true, service: 'aifp4-mesh', version: '0.2.0' });
+      if (p === '/health' && method === 'GET') return send(res, 200, { ok: true, service: 'aifp4-mesh', version: '0.3.0', nodeId: mesh?.nodeId ?? null });
       const now = Date.now(), ip = req.socket.remoteAddress ?? 'unknown';
       if (attempts.size > 10000) {
         for (const [key, entry] of attempts) if (entry.until <= now) attempts.delete(key);
@@ -48,19 +48,31 @@ export function createServer({ service, apiKey }) {
       if (method === 'GET' && p === '/v1/stats') return send(res, 200, service.stats());
       if (method === 'GET' && p === '/v1/routes') return send(res, 200, { routes: service.listRoutes({ asset: url.searchParams.get('asset') ?? undefined }) });
       if (method === 'POST' && p === '/v1/mesh/network') { const data = await readJson(req); if (typeof data.online !== 'boolean') return send(res, 422, { error: 'INVALID_INPUT', requestId }); return send(res, 200, { routes: service.setMockOnline(data.online) }); }
-      if (method === 'POST' && p === '/v1/mesh/reconcile') return send(res, 200, { reconciled: await service.reconcileQueued() });
+      if (method === 'POST' && p === '/v1/mesh/reconcile') {
+        if (mesh) { await mesh.tick(); return send(res, 200, { reconciled: await Promise.all(mesh.snapshot().queue.map(i=>mesh.dispatch(i.id))) }); }
+        return send(res, 200, { reconciled: await service.reconcileQueued() });
+      }
+      if (mesh && method === 'GET' && p === '/v1/mesh/node') return send(res, 200, mesh.snapshot().node);
+      if (mesh && method === 'GET' && ['/v1/mesh/peers','/v1/mesh/links','/v1/mesh/routes','/v1/mesh/topology','/v1/mesh/transports','/v1/mesh/queue','/v1/mesh/messages'].includes(p)) {
+        const key=p.split('/').at(-1), snapshot=mesh.snapshot();
+        return send(res, 200, { [key]: key==='transports'?snapshot.node.transports:snapshot[key] });
+      }
+      const transportControl=p.match(/^\/v1\/mesh\/transports\/(tcp)$/);
+      if(mesh && method==='POST' && transportControl) return send(res,200,await mesh.setTransportOnline(transportControl[1],(await readJson(req)).online));
       for (const [segment, kind] of [['agents', 'agents'], ['policies', 'policies'], ['intents', 'intents'], ['transactions', 'transactions'], ['receipts', 'receipts']]) {
         if (method === 'GET' && p === `/v1/${segment}`) return send(res, 200, { [kind]: service.store.all(kind).slice(-100).reverse() });
       }
       if (method === 'POST' && p === '/v1/agents') return send(res, 201, service.createAgent(await readJson(req)));
       if (method === 'POST' && p === '/v1/policies') return send(res, 201, service.createPolicy(await readJson(req)));
-      if (method === 'POST' && p === '/v1/intents') return send(res, 201, service.createIntent(await readJson(req)));
+      if (method === 'POST' && p === '/v1/intents') { const intent=service.createIntent(await readJson(req)); return send(res, 201, intent); }
       const agentPolicy = p.match(/^\/v1\/agents\/([^/]+)\/policy$/);
       if (agentPolicy && method === 'PUT') return send(res, 200, service.assignPolicy(agentPolicy[1], (await readJson(req)).policyId));
       const detail = p.match(/^\/v1\/(agents|intents|receipts)\/([^/]+)$/);
       if (detail && method === 'GET') { const item = detail[1] === 'intents' ? service.store.get(detail[2]) : detail[1] === 'receipts' ? service.store.all('receipts').find(x => x.receiptId === detail[2]) : service.store.find('agents', detail[2]); return item ? send(res, 200, item) : send(res, 404, { error: 'NOT_FOUND', requestId }); }
+      const pathDetail=p.match(/^\/v1\/intents\/([^/]+)\/path$/);
+      if (mesh && method === 'GET' && pathDetail) { const item=service.store.get(pathDetail[1]); return item?send(res,200,{meshPath:item.meshPath??[],transportPath:item.transportPath??[],receiptVerified:item.receiptVerified??false}):send(res,404,{error:'NOT_FOUND',requestId}); }
       const execute = p.match(/^\/v1\/intents\/([^/]+)\/execute$/);
-      if (execute && method === 'POST') return send(res, 200, await service.execute(execute[1]));
+      if (execute && method === 'POST') return send(res, 200, mesh ? await mesh.dispatch(execute[1]) : await service.execute(execute[1]));
       return send(res, 404, { error: 'NOT_FOUND', requestId });
     } catch (error) {
       const status = error.code === 'PAYLOAD_TOO_LARGE' ? 413 : error.code === 'INTENT_NOT_FOUND' ? 404 : ['IDEMPOTENCY_CONFLICT', 'EXECUTION_UNCERTAIN', 'DAILY_LIMIT_EXCEEDED', 'TRANSACTION_COUNT_EXCEEDED'].includes(error.code) ? 409 : error.name === 'PolicyError' || error.code === 'INVALID_JSON' ? 422 : 500;
