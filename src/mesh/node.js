@@ -24,7 +24,7 @@ export class MeshNode {
     this.deliveries=new DeliveryJournal(this.state,()=>this.persist(),this.deliveryDatabase);
     this.links=new Map(); this.pending=new Map(); this.settling=new Map(); this.busy=false;
     const receive=(message,transport,remotePeer)=>this.receive(message,transport,remotePeer);
-    this.transports=new Map([['tcp',new TcpTransport(tcpPort,receive,{mtu:Number(process.env.MESH_TCP_FRAME_MTU ?? 4096),fragmentFile:path.join(dataDir,'tcp-fragments.json')})],['libp2p',new Libp2pTransport(p2pPort,path.join(dataDir,'libp2p.key'),receive)]]);
+    this.transports=new Map([['tcp',new TcpTransport(tcpPort,receive,{mtu:Number(process.env.MESH_TCP_FRAME_MTU ?? 4096),fragmentFile:path.join(dataDir,'tcp-fragments.json')})],['libp2p',new Libp2pTransport(p2pPort,path.join(dataDir,'libp2p.key'),receive,{mtu:Number(process.env.MESH_P2P_FRAME_MTU ?? 65536),fragmentFile:path.join(dataDir,'libp2p-fragments.json')})]]);
     this.coordinator=new DeliveryCoordinator(this);
     for(const adapter of this.transports.values()) adapter.onMessage((bytes,metadata)=>this.coordinator.onMessage(bytes,metadata).catch(error=>this.event('delivery.rejected',{reason:String(error.message).slice(0,120)})));
   }

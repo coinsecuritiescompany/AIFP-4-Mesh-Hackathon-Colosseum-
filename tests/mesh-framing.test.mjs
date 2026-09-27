@@ -50,12 +50,12 @@ test('partial transfer survives restart in an independent persistent file',()=>{
     assert.equal(fs.statSync(file).mode & 0o777,0o600);
   } finally {fs.rmSync(root,{recursive:true,force:true});}
 });
-test('real software transports expose independent link capabilities without claiming fragmentation',()=>{
+test('software transports expose shared framing while distinguishing bearer security',()=>{
   const tcp=new TcpTransport(0,()=>{}).capabilities();
   const p2p=new Libp2pTransport(0,'/unused',()=>{}).capabilities();
   for(const adapter of [tcp,p2p]) {
     assert.equal(adapter.implementationStatus,'IMPLEMENTED_AND_TESTED');
-    assert.equal(adapter.supportsFragmentation,adapter.transportId==='tcp');
+    assert.equal(adapter.supportsFragmentation,true);
     assert.equal(adapter.supportsDirectPeer,true);
     assert.ok(adapter.maxPayload>0);
   }

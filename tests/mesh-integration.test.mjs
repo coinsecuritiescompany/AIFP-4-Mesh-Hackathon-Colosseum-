@@ -21,7 +21,7 @@ const topology={
   d:[peer('a',{p2p:true,p2pCost:30}),peer('c',{tcp:true,tcpCost:20})]
 };
 function start(id) {
-  const child=spawn(process.execPath,['src/mesh/start.js'],{cwd:process.cwd(),env:{...process.env,MESH_NODE_ID:`node-${id}`,MESH_DATA_DIR:path.join(root,id),MESH_PEERS:JSON.stringify(topology[id]),MESH_SETTLE_MOCK:id==='c'?'true':'false',MESH_TCP_PORT:String(tcp(id)),MESH_TCP_FRAME_MTU:'400',MESH_P2P_PORT:String(p2p(id)),MESH_P2P_BIND:'127.0.0.1',MESH_TICK_MS:'600',PORT:String(port(id))},stdio:['ignore','pipe','pipe']});
+  const child=spawn(process.execPath,['src/mesh/start.js'],{cwd:process.cwd(),env:{...process.env,MESH_NODE_ID:`node-${id}`,MESH_DATA_DIR:path.join(root,id),MESH_PEERS:JSON.stringify(topology[id]),MESH_SETTLE_MOCK:id==='c'?'true':'false',MESH_TCP_PORT:String(tcp(id)),MESH_TCP_FRAME_MTU:'400',MESH_P2P_FRAME_MTU:'400',MESH_P2P_PORT:String(p2p(id)),MESH_P2P_BIND:'127.0.0.1',MESH_TICK_MS:'600',PORT:String(port(id))},stdio:['ignore','pipe','pipe']});
   let output=''; for(const stream of [child.stdout,child.stderr]) stream.on('data',chunk=>{output+=chunk.toString();logs.set(id,output.slice(-6000));});
   children.set(id,child);
 }
@@ -54,6 +54,12 @@ test('independent nodes discover signed capabilities and heterogeneous links',as
   assert.equal(node.transports.find(t=>t.id==='tcp').mtu,400);
 });
 test('A to B by TCP, B to C by libp2p settles and verifies receipt',async()=>{
+  // C needs the complete advertised return graph before choosing the ACK
+  // route; otherwise it can legitimately use its expensive direct C→B edge.
+  await waitFor(async()=>{
+    const {topology}=await api('c','/v1/mesh/topology');
+    return [['node-c','node-d'],['node-d','node-a'],['node-a','node-b']].every(([from,to])=>topology.links.some(edge=>edge.from===from&&edge.to===to));
+  });
   const intent=await api('a','/v1/intents','POST',payment());
   const result=await executeAndWait(intent.id);
   assert.equal(result.state,'settled',JSON.stringify(result));
