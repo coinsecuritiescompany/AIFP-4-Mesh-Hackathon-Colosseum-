@@ -16,6 +16,13 @@ export class Reassembler {
     fs.writeFileSync(tmp,JSON.stringify(this.pending),{mode:0o600});
     fs.renameSync(tmp,this.file); fs.chmodSync(this.file,0o600);
   }
+  status(messageId, originalPayloadHash, now=Date.now()) {
+    const entry=this.pending[messageId];
+    if(!entry || entry.hash!==originalPayloadHash || entry.expiresAt<=now) return null;
+    const missing=[];
+    for(let i=0;i<entry.count;i++) if(!Object.hasOwn(entry.parts,i)) missing.push(i);
+    return {messageId,originalPayloadHash,fragmentCount:entry.count,missing};
+  }
   accept(fragment, now = Date.now()) {
     const f=fragment;
     if(!f || f.protocolVersion!==1 || !/^[0-9a-f-]{36}$/.test(f.messageId ?? '') || f.fragmentId!==`${f.messageId}:${f.fragmentIndex}` || !Number.isInteger(f.fragmentIndex) || !Number.isInteger(f.fragmentCount) || f.fragmentCount<1 || f.fragmentCount>MAX_FRAGMENTS || f.fragmentIndex<0 || f.fragmentIndex>=f.fragmentCount || !/^[0-9a-f]{64}$/.test(f.originalPayloadHash ?? '') || !/^[0-9a-f]{64}$/.test(f.fragmentHash ?? '') || !Number.isFinite(Date.parse(f.createdAt)) || !Number.isFinite(Date.parse(f.expiresAt)) || Date.parse(f.createdAt)>now+30000 || Date.parse(f.expiresAt)<=now || Date.parse(f.expiresAt)>now+86400000 || !(f.payload instanceof Uint8Array) || !f.payload.length || f.payload.length>MAX_ENVELOPE_BYTES) throw new Error('INVALID_FRAGMENT');

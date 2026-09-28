@@ -130,7 +130,7 @@ export class DeliveryCoordinator {
       this.db.updateHop(hopId,'FAILED_TEMPORARY','READY',{messageId:wire.messageId,previousMessageIds:[old.messageId,...(old.previousMessageIds??[])].slice(0,16),bundleHash:hash,attempts,nextAttemptAt:hop.nextAttemptAt});
     } else this.db.createHop(hop);
     try {
-      const submission=await node.transports.get(edge.transport).submit(peer,wireEncode(wire),{messageId:wire.messageId,expiresAt:wire.expiresAt});
+      const submission=await node.transports.get(edge.transport).submit(peer,wireEncode(wire),{messageId:wire.messageId,expiresAt:wire.expiresAt,expectedRemotePeer:node.state.advertisements[edge.to]?.data.peerId});
       if(this.db.hop(hopId)?.state==='READY') this.db.updateHop(hopId,'READY','SUBMITTED',{submissionId:submission.submissionId});
       if(['QUEUED','WAITING_LINK'].includes(this.db.bundle(bundle.bundleId)?.state)) this.db.updateBundle(bundle.bundleId,this.db.bundle(bundle.bundleId).state,'SUBMITTED');
       node.event('delivery.submitted',{intentId:bundle.intentId,bundleId:bundle.bundleId,hopDeliveryId:hopId,to:edge.to,transport:edge.transport});
