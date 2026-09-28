@@ -38,7 +38,9 @@ test('libp2p submit uses a separate one-way Noise/Yamux stream without remote pa
   try {
     await Promise.all([a.start(),b.start()]);
     const payload=wireEncode({message:'one-way delivery'.repeat(300)});
-    const submission=await a.submit({id:'node-b',p2p:`/ip4/127.0.0.1/tcp/${port+1}`},payload);
+    const remote={id:'node-b',p2p:`/ip4/127.0.0.1/tcp/${port+1}`};
+    await assert.rejects(a.submit(remote,payload,{expectedRemotePeer:'wrong-peer'}),/LIBP2P_IDENTITY_MISMATCH/);
+    const submission=await a.submit(remote,payload,{expectedRemotePeer:b.peerId});
     assert.equal(submission.state,'ACCEPTED_LOCAL');
     const received=await delivered;
     assert.deepEqual(received.bytes,payload);
@@ -46,4 +48,22 @@ test('libp2p submit uses a separate one-way Noise/Yamux stream without remote pa
     assert.equal(b.capabilities().supportsFragmentation,true);
     assert.equal(b.health().mtu,400);
   } finally {finish();await Promise.all([a.stop(),b.stop()]);fs.rmSync(dir,{recursive:true,force:true});}
+});
+test('libp2p retransmits only the missing frame of a large signed-envelope payload',async()=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'aifp-selective-p2p-'));
+  const port=30000+randomInt(10000);
+  const a=new Libp2pTransport(port,path.join(dir,'a.key'),()=>{}, {mtu:400,faultDropOnceIndices:[18]});
+  const b=new Libp2pTransport(port+1,path.join(dir,'b.key'),()=>{}, {mtu:400,fragmentFile:path.join(dir,'b-fragments.json')});
+  let delivered=0,received;
+  const done=new Promise(resolve=>{received=resolve;});
+  b.onMessage(bytes=>{delivered++;received(bytes);});
+  try {
+    await Promise.all([a.start(),b.start()]);
+    const payload=wireEncode({message:'fragment'.repeat(2000)});
+    const result=await a.submit({id:'node-b',p2p:`/ip4/127.0.0.1/tcp/${port+1}`},payload);
+    assert.deepEqual(result.retransmittedIndexes,[18]);
+    assert.ok(result.fragmentsSent>50);
+    assert.deepEqual(await Promise.race([done,new Promise((_,reject)=>setTimeout(()=>reject(new Error('DELIVERY_TIMEOUT')),5000))]),payload);
+    assert.equal(delivered,1);
+  } finally {await Promise.all([a.stop(),b.stop()]);fs.rmSync(dir,{recursive:true,force:true});}
 });

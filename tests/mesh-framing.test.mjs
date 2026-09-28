@@ -50,6 +50,21 @@ test('partial transfer survives restart in an independent persistent file',()=>{
     assert.equal(fs.statSync(file).mode & 0o777,0o600);
   } finally {fs.rmSync(root,{recursive:true,force:true});}
 });
+test('persisted receiver reports only missing fragment indexes after restart',()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'aifp-missing-'));
+  try {
+    const fragments=parts(Buffer.alloc(14000,7));
+    const file=path.join(root,'partial.json');
+    const first=new Reassembler(file);
+    for(const fragment of fragments.filter(f=>![3,18].includes(f.fragmentIndex))) first.accept(fragment);
+    const second=new Reassembler(file);
+    const status=second.status(fragments[0].messageId,fragments[0].originalPayloadHash);
+    assert.deepEqual(status.missing,[3,18]);
+    assert.equal(second.status(fragments[0].messageId,'0'.repeat(64)),null);
+    assert.equal(second.accept(fragments[18]).status,'incomplete');
+    assert.equal(second.accept(fragments[3]).status,'complete');
+  } finally {fs.rmSync(root,{recursive:true,force:true});}
+});
 test('software transports expose shared framing while distinguishing bearer security',()=>{
   const tcp=new TcpTransport(0,()=>{}).capabilities();
   const p2p=new Libp2pTransport(0,'/unused',()=>{}).capabilities();

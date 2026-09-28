@@ -21,10 +21,12 @@ async function readBytes(stream) {
 }
 async function read(stream) {return wireDecode(await readBytes(stream));}
 export class Libp2pTransport {
-  constructor(port, keyFile, receive, {mtu=65536,fragmentFile=null}={}) {
+  constructor(port, keyFile, receive, {mtu=65536,fragmentFile=null,faultDropOnceIndices=[]}={}) {
     if(!Number.isInteger(mtu)||mtu<256||mtu>65536) throw new Error('INVALID_LIBP2P_MTU');
     this.id='libp2p'; this.port=port; this.keyFile=keyFile; this.receive=receive; this.node=null; this.messageHandler=null;this.mtu=mtu;
     this.reassembler=new Reassembler(fragmentFile);
+    this.completedFragments=new Map();
+    this.faultDropOnceIndices=new Set(faultDropOnceIndices);
   }
   async start() {
     fs.mkdirSync(path.dirname(this.keyFile),{recursive:true,mode:0o700});
@@ -38,9 +40,25 @@ export class Libp2pTransport {
       try {
         const bytes=await readBytes(stream);
         let packet=wireDecode(bytes);
+        if(packet?.transportMode==='fragment-status-v1') {
+          const complete=this.completedFragments.get(packet.messageId);
+          const validComplete=complete?.hash===packet.originalPayloadHash && complete.expiresAt>Date.now();
+          const partial=this.reassembler.status(packet.messageId,packet.originalPayloadHash);
+          stream.send(wireEncode({transportMode:'fragment-status-v1',messageId:packet.messageId,originalPayloadHash:packet.originalPayloadHash,complete:Boolean(validComplete),fragmentCount:validComplete?complete.count:partial?.fragmentCount??0,missing:validComplete?[]:partial?.missing??null}));
+          await stream.close();return;
+        }
         if(Array.isArray(packet)) {
-          const result=this.reassembler.accept(decodeFragment(bytes));
+          const fragment=decodeFragment(bytes);
+          const completed=this.completedFragments.get(fragment.messageId);
+          if(completed && completed.expiresAt>Date.now()) {
+            if(completed.hash!==fragment.originalPayloadHash) throw new Error('FRAGMENT_CONFLICT');
+            await stream.close();return;
+          }
+          const result=this.reassembler.accept(fragment);
           if(result.status!=='complete') {await stream.close();return;}
+          for(const [id,entry] of this.completedFragments) if(entry.expiresAt<=Date.now()) this.completedFragments.delete(id);
+          if(this.completedFragments.size>=128) this.completedFragments.delete(this.completedFragments.keys().next().value);
+          this.completedFragments.set(fragment.messageId,{hash:fragment.originalPayloadHash,count:fragment.fragmentCount,expiresAt:Date.parse(fragment.expiresAt)});
           packet=wireDecode(result.bytes);
         }
         if(packet?.transportMode!=='async-v1'||!(packet.payload instanceof Uint8Array)||packet.payload.length>65536||!this.messageHandler) throw new Error('INVALID_TRANSPORT_PAYLOAD');
@@ -53,18 +71,41 @@ export class Libp2pTransport {
   }
   async stop() { if(this.node) await this.node.stop(); }
   onMessage(handler) {if(typeof handler!=='function') throw new Error('INVALID_MESSAGE_HANDLER');this.messageHandler=handler;}
-  async submit(peer,payload,{messageId=randomUUID(),expiresAt=new Date(Date.now()+60000).toISOString()}={}) {
+  async submit(peer,payload,{messageId=randomUUID(),expiresAt=new Date(Date.now()+60000).toISOString(),expectedRemotePeer=null}={}) {
     if(!peer.p2p) throw new Error('LIBP2P_NOT_CONFIGURED');
     if(!(payload instanceof Uint8Array)||payload.length>60000) throw new Error('INVALID_TRANSPORT_PAYLOAD');
     const wrapper=wireEncode({transportMode:'async-v1',messageId,expiresAt,payload:Buffer.from(payload)});
-    const packets=wrapper.length<=this.mtu?[wrapper]:fragmentEnvelope(wrapper,{mtu:this.mtu,messageId,expiresAt}).map(encodeFragment);
+    const fragments=wrapper.length<=this.mtu?null:fragmentEnvelope(wrapper,{mtu:this.mtu,messageId,expiresAt});
+    const packets=fragments?fragments.map(encodeFragment):[wrapper];
     const connection=await this.node.dial(multiaddr(peer.p2p),{signal:AbortSignal.timeout(2500)});
-    for(const packet of packets) {
-      const stream=await connection.newStream(DELIVERY_PROTOCOL,{signal:AbortSignal.timeout(2500)});
-      try {stream.send(packet);await stream.close();}
-      catch(error) {stream.abort(error);throw error;}
+    if(expectedRemotePeer && connection.remotePeer.toString()!==expectedRemotePeer) throw new Error('LIBP2P_IDENTITY_MISMATCH');
+    let sent=0;const retransmitted=[];
+    const transmit=async indexes=>{
+      for(const index of indexes) {
+        if(this.faultDropOnceIndices.delete(index)) continue;
+        const stream=await connection.newStream(DELIVERY_PROTOCOL,{signal:AbortSignal.timeout(2500)});
+        try {stream.send(packets[index]);await stream.close();sent++;}
+        catch(error) {stream.abort(error);throw error;}
+      }
+    };
+    await transmit(packets.map((_,index)=>index));
+    if(fragments) {
+      for(let attempt=0;attempt<3;attempt++) {
+        const stream=await connection.newStream(DELIVERY_PROTOCOL,{signal:AbortSignal.timeout(2500)});
+        let status;
+        try {
+          stream.send(wireEncode({transportMode:'fragment-status-v1',messageId,originalPayloadHash:fragments[0].originalPayloadHash}));
+          await stream.close();status=await read(stream);
+        } catch(error) {stream.abort(error);throw error;}
+        if(status?.transportMode!=='fragment-status-v1'||status.messageId!==messageId||status.originalPayloadHash!==fragments[0].originalPayloadHash) throw new Error('INVALID_FRAGMENT_STATUS');
+        if(status.complete && status.fragmentCount===packets.length && Array.isArray(status.missing) && !status.missing.length) break;
+        const missing=status.missing===null?packets.map((_,index)=>index):status.missing;
+        if(!Array.isArray(missing)||(status.missing!==null && status.fragmentCount!==packets.length)||missing.length>packets.length||missing.some(index=>!Number.isInteger(index)||index<0||index>=packets.length)||new Set(missing).size!==missing.length) throw new Error('INVALID_FRAGMENT_STATUS');
+        if(attempt===2) throw new Error('FRAGMENT_DELIVERY_INCOMPLETE');
+        retransmitted.push(...missing);await transmit(missing);
+      }
     }
-    return {submissionId:randomUUID(),transportId:this.id,peerId:peer.id,acceptedAt:new Date().toISOString(),state:'ACCEPTED_LOCAL'};
+    return {submissionId:randomUUID(),transportId:this.id,peerId:peer.id,acceptedAt:new Date().toISOString(),state:'ACCEPTED_LOCAL',fragmentsSent:sent,retransmittedIndexes:retransmitted};
   }
   async send(peer,message) {
     if (!peer.p2p) throw new Error('LIBP2P_NOT_CONFIGURED');
