@@ -17,6 +17,8 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm audit --omit=dev --audit-level=high
       - run: npm run ci
+      - run: npm run demo:smoke
+      - run: npm run demo:configure
       - run: docker compose config --quiet
       - run: docker compose build
       - name: Smoke test one-command stack

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { sha256 } from '../canonical.js';
-import { evaluatePolicy } from '../policy.js';
+import { evaluatePolicy, PolicyError } from '../policy.js';
 import { envelope, validateEnvelope } from './protocol.js';
 import { loadIdentity, verifySigned } from './identity.js';
 import { planRoute } from './routing.js';
@@ -24,7 +24,7 @@ export class MeshNode {
     this.deliveries=new DeliveryJournal(this.state,()=>this.persist(),this.deliveryDatabase);
     this.links=new Map(); this.pending=new Map(); this.settling=new Map(); this.busy=false;
     const receive=(message,transport,remotePeer)=>this.receive(message,transport,remotePeer);
-    this.transports=new Map([['tcp',new TcpTransport(tcpPort,receive,{mtu:Number(process.env.MESH_TCP_FRAME_MTU ?? 4096),fragmentFile:path.join(dataDir,'tcp-fragments.json')})],['libp2p',new Libp2pTransport(p2pPort,path.join(dataDir,'libp2p.key'),receive,{mtu:Number(process.env.MESH_P2P_FRAME_MTU ?? 65536),fragmentFile:path.join(dataDir,'libp2p-fragments.json')})]]);
+    this.transports=new Map([['tcp',new TcpTransport(tcpPort,receive,{bindHost:process.env.MESH_TCP_BIND ?? '127.0.0.1',mtu:Number(process.env.MESH_TCP_FRAME_MTU ?? 4096),fragmentFile:path.join(dataDir,'tcp-fragments.json')})],['libp2p',new Libp2pTransport(p2pPort,path.join(dataDir,'libp2p.key'),receive,{mtu:Number(process.env.MESH_P2P_FRAME_MTU ?? 65536),fragmentFile:path.join(dataDir,'libp2p-fragments.json')})]]);
     this.coordinator=new DeliveryCoordinator(this);
     for(const adapter of this.transports.values()) adapter.onMessage((bytes,metadata)=>this.coordinator.onMessage(bytes,metadata).catch(error=>this.event('delivery.rejected',{reason:String(error.message).slice(0,120)})));
   }
@@ -199,7 +199,7 @@ export class MeshNode {
     this.event('bundle.queued',{intentId,type});
   }
   verifyReceipt(receipt,intent) {
-    if(!receipt || receipt.intentId!==intent.id || receipt.intentHash!==intent.intentHash || receipt.originNodeId!==this.nodeId) throw new Error('INVALID_RECEIPT');
+    if(!receipt || receipt.intentId!==intent.id || receipt.intentHash!==intent.intentHash || receipt.originNodeId!==this.nodeId || receipt.amountMinor!==intent.amountMinor || receipt.asset!==intent.asset || typeof receipt.executionReference!=='string' || !receipt.executionReference || !Number.isFinite(Date.parse(receipt.settledAt))) throw new Error('INVALID_RECEIPT');
     const {receiptHash,settlementNodeSignature,...core}=receipt;
     const key=this.state.peerKeys[receipt.settlementNodeId];
     if(!key || receiptHash!==sha256(core) || !verifySigned(core,settlementNodeSignature,key)) throw new Error('INVALID_RECEIPT_SIGNATURE');
@@ -221,11 +221,11 @@ export class MeshNode {
     try { return await promise; } finally { this.pending.delete(id); }
   }
   async #dispatch(id) {
-    const intent=this.service.store.get(id); if(!intent) throw new Error('INTENT_NOT_FOUND');
+    const intent=this.service.store.get(id); if(!intent) throw new PolicyError('INTENT_NOT_FOUND', 'Intent not found');
     if(intent.state==='settled' || intent.state==='expired' || intent.state==='executing') return intent;
     if(Date.parse(intent.expiresAt)<=Date.now()) { intent.state='expired'; this.service.store.save(intent); this.event('bundle.expired',{intentId:id}); return intent; }
     const agent=this.service.store.find('agents',intent.agentId), policy=this.service.store.find('policies',intent.policyId), currentPolicy=this.service.store.find('policies',agent?.policyId);
-    if(!agent || agent.status!=='active' || !policy || !currentPolicy) throw new Error('MISSING_AUTHORITY');
+    if(!agent || agent.status!=='active' || !policy || !currentPolicy) throw new PolicyError('MISSING_AUTHORITY', 'Agent or spending policy is unavailable');
     const usage=this.service.store.all('transactions').filter(t=>t.state==='settled');
     evaluatePolicy(intent,policy,usage); evaluatePolicy(intent,currentPolicy,usage);
     const payload={intent,agent,policy,currentPolicy,originNodeId:this.nodeId,originPublicKey:this.identity.publicKey,originAdvertisement:this.state.advertisements[this.nodeId],originSignature:this.identity.sign({intentHash:intent.intentHash,originNodeId:this.nodeId,agent,policy,currentPolicy}),path:[this.nodeId],transportPath:[]};

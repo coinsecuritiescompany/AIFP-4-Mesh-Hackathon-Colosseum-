@@ -31,13 +31,16 @@ export class IntentStore {
   get(id) { return this.find('intents', id); }
   save(intent) { return this.saveKind('intents', intent); }
   commitMeshReceipt(intentId, receipt, transaction) {
+    return this.commitSettlement(intentId, receipt, transaction, {mesh:true});
+  }
+  commitSettlement(intentId, receipt, transaction, {mesh=false}={}) {
     const current=this.get(intentId);
     if(!current || receipt.intentId!==intentId || transaction.intentId!==intentId) throw new Error('INVALID_MESH_RECEIPT_COMMIT');
     if(current.state==='settled') return current;
     const previousReceipt=this.data.receipts.find(r=>r.intentId===intentId);
     const previousTransaction=this.data.transactions.find(t=>t.intentId===intentId);
     if((previousReceipt && (previousReceipt.receiptId!==receipt.receiptId || previousReceipt.receiptHash!==receipt.receiptHash)) || (previousTransaction && previousTransaction.reference!==transaction.reference)) throw new Error('SETTLEMENT_RECORD_CONFLICT');
-    const settled={...current,receipt,state:'settled',meshPath:receipt.meshPath,transportPath:receipt.transportPath,receiptVerified:true};
+    const settled={...current,receipt,state:transaction.state ?? 'settled',...(mesh?{meshPath:receipt.meshPath,transportPath:receipt.transportPath,receiptVerified:true}:{})};
     const previous=this.data;
     this.data={...previous,
       intents:previous.intents.map(i=>i.id===intentId?settled:i),

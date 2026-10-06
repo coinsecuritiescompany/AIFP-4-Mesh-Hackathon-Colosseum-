@@ -1,6 +1,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 
 const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
@@ -23,7 +24,7 @@ function authorized(candidate, expected) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 export function createServer({ service, apiKey, mesh = null }) {
-  const root = path.resolve('public');
+  const root = fileURLToPath(new URL('../public/', import.meta.url));
   const attempts = new Map();
   return http.createServer(async (req, res) => {
     const requestId = randomUUID();
@@ -33,7 +34,7 @@ export function createServer({ service, apiKey, mesh = null }) {
         const file = path.join(root, p === '/' ? 'index.html' : p.slice(1));
         return send(res, 200, fs.readFileSync(file, 'utf8'), types[path.extname(file)]);
       }
-      if (p === '/health' && method === 'GET') return send(res, 200, { ok: true, service: 'aifp4-mesh', version: '0.3.0', nodeId: mesh?.nodeId ?? null });
+      if (p === '/health' && method === 'GET') return send(res, 200, { ok: true, service: 'aifp4-mesh', version: '0.3.1', nodeId: mesh?.nodeId ?? null });
       const now = Date.now(), ip = req.socket.remoteAddress ?? 'unknown';
       if (attempts.size > 10000) {
         for (const [key, entry] of attempts) if (entry.until <= now) attempts.delete(key);
@@ -58,7 +59,7 @@ export function createServer({ service, apiKey, mesh = null }) {
         return send(res, 200, { [key]: key==='transports'?snapshot.node.transports:snapshot[key] });
       }
       const transportControl=p.match(/^\/v1\/mesh\/transports\/(tcp)$/);
-      if(mesh && method==='POST' && transportControl) return send(res,200,await mesh.setTransportOnline(transportControl[1],(await readJson(req)).online));
+      if(mesh && method==='POST' && transportControl) { const body=await readJson(req); if(typeof body.online!=='boolean') return send(res,422,{error:'INVALID_INPUT',requestId}); return send(res,200,await mesh.setTransportOnline(transportControl[1],body.online)); }
       for (const [segment, kind] of [['agents', 'agents'], ['policies', 'policies'], ['intents', 'intents'], ['transactions', 'transactions'], ['receipts', 'receipts']]) {
         if (method === 'GET' && p === `/v1/${segment}`) return send(res, 200, { [kind]: service.store.all(kind).slice(-100).reverse() });
       }

@@ -32,7 +32,7 @@ export class Libp2pTransport {
     fs.mkdirSync(path.dirname(this.keyFile),{recursive:true,mode:0o700});
     if (!fs.existsSync(this.keyFile)) fs.writeFileSync(this.keyFile, Buffer.from(privateKeyToProtobuf(await generateKeyPair('Ed25519'))),{mode:0o600,flag:'wx'});
     const privateKey=privateKeyFromProtobuf(fs.readFileSync(this.keyFile));
-    this.node=await createLibp2p({ privateKey, addresses:{listen:[`/ip4/${process.env.MESH_P2P_BIND ?? '0.0.0.0'}/tcp/${this.port}`]}, transports:[tcp()], connectionEncrypters:[noise()], streamMuxers:[yamux()], services:{identify:identify()} });
+    this.node=await createLibp2p({ privateKey, addresses:{listen:[`/ip4/${process.env.MESH_P2P_BIND ?? '127.0.0.1'}/tcp/${this.port}`]}, transports:[tcp()], connectionEncrypters:[noise()], streamMuxers:[yamux()], services:{identify:identify()} });
     this.node.handle(VERSION, async (stream,connection) => {
       try { const response=await this.receive(await read(stream),'libp2p',connection.remotePeer.toString()); stream.send(wireEncode(response)); await stream.close(); } catch(error) { stream.abort(error); }
     });

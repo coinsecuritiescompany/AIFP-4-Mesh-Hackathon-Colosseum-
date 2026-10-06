@@ -6,7 +6,7 @@ import { getAddMemoInstruction } from '@solana-program/memo';
 
 // This rail is enabled only with a disposable, pre-funded Devnet-only payer.
 export class SolanaDevnetAdapter {
-  constructor(secretJson) { this.secretJson = secretJson; }
+  constructor(secretJson, { createRpcClient = payer => createClient().use(signer(payer)).use(solanaDevnetRpc()), wait = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) { this.secretJson = secretJson; this.createRpcClient = createRpcClient; this.wait = wait; }
   async execute(intent) {
     if (intent.asset !== 'SOL') throw new Error('Solana Devnet adapter supports SOL only');
     if (!this.secretJson) throw new Error('Devnet payer is not configured');
@@ -14,7 +14,7 @@ export class SolanaDevnetAdapter {
     if (bytes.length !== 64) throw new Error('Devnet payer must be a 64-byte keypair array');
     const payer = await createKeyPairSignerFromBytes(bytes);
     const destination = address(intent.beneficiary);
-    const client = createClient().use(signer(payer)).use(solanaDevnetRpc());
+    const client = this.createRpcClient(payer);
     const { context } = await client.sendTransaction([
       getTransferSolInstruction({ source: client.payer, destination, amount: lamports(BigInt(intent.amountMinor)) }),
       getAddMemoInstruction({ memo: `AIFP4:${intent.intentHash}` })
@@ -28,7 +28,7 @@ export class SolanaDevnetAdapter {
       if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') {
         return { executionId: signature, rail: 'solana-devnet', network: 'solana-devnet', status: 'settled', reference: signature, signature, explorer: `https://explorer.solana.com/tx/${signature}?cluster=devnet`, amountMinor: intent.amountMinor, asset: 'SOL', beneficiary: intent.beneficiary, feeMinor: 0, settledAt: new Date().toISOString() };
       }
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await this.wait(1000);
     }
     throw new Error('Devnet confirmation unknown; inspect the payer before retrying');
   }

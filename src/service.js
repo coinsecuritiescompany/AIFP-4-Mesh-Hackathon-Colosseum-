@@ -41,7 +41,7 @@ export class MeshService {
     const prior = this.store.all('intents').find(x => x.idempotencyKey === input.idempotencyKey && input.idempotencyKey);
     if (prior) {
       const fields = ['agentId', 'beneficiary', 'amountMinor', 'asset', 'purpose'];
-      if (fields.some(field => prior[field] !== input[field]) || (input.expiresAt !== undefined && prior.expiresAt !== input.expiresAt)) throw new PolicyError('IDEMPOTENCY_CONFLICT', 'This key belongs to a different payment');
+      if (fields.some(field => prior[field] !== (field === 'beneficiary' && typeof input[field] === 'string' ? input[field].trim() : input[field])) || (input.expiresAt !== undefined && prior.expiresAt !== input.expiresAt)) throw new PolicyError('IDEMPOTENCY_CONFLICT', 'This key belongs to a different payment');
       return prior;
     }
     const agent = this.store.find('agents', input.agentId);
@@ -62,7 +62,7 @@ export class MeshService {
     if (routeDecision.mode === 'queued' && !policy.offlineAllowed) throw new PolicyError('OFFLINE_BLOCKED', 'Policy does not permit offline queueing');
     if (routeDecision.mode === 'unavailable' && !this.meshMode) throw new PolicyError('ROUTE_UNAVAILABLE', 'No eligible route');
     const intentHash = sha256(base);
-    const intent = { ...base, intentHash, signature: hmacSha256({ intentHash, agentId: agent.id }, this.signingSecret), policyDecision, routeDecision, state: routeDecision.mode === 'unavailable' && this.meshMode ? 'queued_for_mesh' : routeDecision.mode === 'queued' ? 'queued' : 'authorized', receipt: null };
+    const intent = { ...base, intentHash, signature: hmacSha256({ intentHash, agentId: agent.id }, this.signingSecret), policyDecision, routeDecision, state: this.meshMode ? 'authorized' : routeDecision.mode === 'queued' ? 'queued' : 'authorized', receipt: null };
     this.store.add('events', { id: newId('evt'), intentId: intent.id, type: `intent.${intent.state}`, createdAt: now });
     return this.store.create(intent).intent;
   }
@@ -103,11 +103,9 @@ export class MeshService {
     try {
       const execution = await adapter.execute(intent, routeDecision.route);
       const core = { protocol: 'AIFP-4-Mesh', receiptId: newId('rcpt'), intentId: intent.id, intentHash: intent.intentHash, execution, issuedAt: new Date().toISOString() };
-      intent.receipt = { ...core, receiptHash: sha256(core), receiptMac: hmacSha256(core, this.signingSecret) };
-      intent.state = execution.status === 'settled' ? 'settled' : 'failed';
-      this.store.add('receipts', intent.receipt);
-      this.store.add('transactions', { id: newId('txn'), intentId: intent.id, agentId: intent.agentId, beneficiary: intent.beneficiary, amountMinor: intent.amountMinor, asset: intent.asset, rail: execution.rail, state: intent.state, reference: execution.reference, createdAt: core.issuedAt });
-      return this.store.save(intent);
+      const receipt = { ...core, receiptHash: sha256(core), receiptMac: hmacSha256(core, this.signingSecret) };
+      const state = execution.status === 'settled' ? 'settled' : 'failed';
+      return this.store.commitSettlement(intent.id, receipt, { id: newId('txn'), intentId: intent.id, agentId: intent.agentId, beneficiary: intent.beneficiary, amountMinor: intent.amountMinor, asset: intent.asset, rail: execution.rail, state, reference: execution.reference, createdAt: core.issuedAt });
     } catch (error) {
       intent.failure = 'Execution outcome uncertain; inspect the rail before retrying'; this.store.save(intent); throw error;
     }

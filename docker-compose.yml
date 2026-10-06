@@ -12,8 +12,11 @@ x-mesh-base: &mesh-base
 x-mesh-env: &mesh-env
   PORT: "4044"
   NODE_ENV: production
-  AIFP4_API_KEY: ${AIFP4_API_KEY:-sandbox-demo-key}
-  MESH_HMAC_SECRET: ${MESH_HMAC_SECRET:-sandbox-only-change-me}
+  AIFP4_HTTP_BIND: "0.0.0.0"
+  MESH_TCP_BIND: "0.0.0.0"
+  MESH_P2P_BIND: "0.0.0.0"
+  AIFP4_API_KEY: ${AIFP4_API_KEY:?Run npm run demo:configure first}
+  MESH_HMAC_SECRET: ${MESH_HMAC_SECRET:?Run npm run demo:configure first}
   AIFP4_BIND_HOST: ${AIFP4_BIND_HOST:-127.0.0.1}
 
 services:

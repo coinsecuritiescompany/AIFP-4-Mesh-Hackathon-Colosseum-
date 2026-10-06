@@ -7,7 +7,7 @@ import { MeshNode } from './node.js';
 
 const env=process.env, nodeId=env.MESH_NODE_ID;
 if(!/^[a-z0-9-]{1,48}$/.test(nodeId ?? '')) throw new Error('MESH_NODE_ID is required');
-const {apiKey,signingSecret}=validateRuntimeSecurity(env);
+const {apiKey,signingSecret}=validateRuntimeSecurity({...env,AIFP4_BIND_HOST:env.AIFP4_HTTP_BIND ?? '127.0.0.1'});
 const dir=env.MESH_DATA_DIR ?? `.data/${nodeId}`;
 const routes=[];
 if(env.MESH_SETTLE_MOCK==='true') routes.push({id:'route_mock_usdc',rail:'mock',network:'sandbox',asset:'USDC',online:true,feeBps:10,fixedFeeMinor:0,latencyMs:80,supportsOfflineQueue:true,minAmountMinor:1,maxAmountMinor:1000000});
@@ -18,6 +18,6 @@ const peers=Object.fromEntries(JSON.parse(env.MESH_PEERS ?? '[]').map(p=>[p.id,p
 const mesh=new MeshNode({nodeId,dataDir:dir,peers,service,tcpPort:Number(env.MESH_TCP_PORT ?? 4100),p2pPort:Number(env.MESH_P2P_PORT ?? 4200),tickMs:Number(env.MESH_TICK_MS ?? 2000)});
 await mesh.start();
 const server=createServer({service,apiKey,mesh});
-server.listen(Number(env.PORT ?? 4044),'0.0.0.0',()=>console.log(`Mesh ${nodeId} API ready; peerId ${mesh.transports.get('libp2p').peerId}`));
+server.listen(Number(env.PORT ?? 4044),env.AIFP4_HTTP_BIND ?? '127.0.0.1',()=>console.log(`Mesh ${nodeId} API ready; peerId ${mesh.transports.get('libp2p').peerId}`));
 async function close() { server.close(); await mesh.stop(); process.exit(0); }
 process.on('SIGTERM',close); process.on('SIGINT',close);
