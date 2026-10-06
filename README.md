@@ -36,7 +36,7 @@ Open **http://127.0.0.1:4044/**. The dashboard proxies node A. Five independent 
 node scripts/compose-smoke.mjs
 ```
 
-Run it with the generated key exported: `set -a; . ./.env; set +a` on a POSIX shell.
+The proof scripts load the generated credentials from `.env`; explicitly exported environment variables take precedence.
 
 The script proves A → B via TCP, B → C via libp2p, stops B, proves A → D via libp2p, D → C via TCP, then restarts B. It creates only mock USDC payments. See [the manual demo](docs/MESH_DEMO.md). `docker compose down` retains volumes; `docker compose down -v` removes all local identities and demo history.
 

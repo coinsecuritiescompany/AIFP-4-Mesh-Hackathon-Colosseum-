@@ -1,3 +1,4 @@
+import './load-demo-env.mjs';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
