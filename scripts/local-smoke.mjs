@@ -1,0 +1,38 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { randomBytes, randomInt, randomUUID } from 'node:crypto';
+import { createLocalNetwork, waitFor } from './local-network.mjs';
+const dir=fs.mkdtempSync(path.join(os.tmpdir(),'aifp4-local-smoke-'));
+let network;
+try {
+  network=await createLocalNetwork({dataDir:dir,basePort:35000+randomInt(10000),apiKey:randomBytes(32).toString('hex'),signingSecret:randomBytes(32).toString('hex')});
+  const api=(route,method,body)=>network.api('a',route,method,body);
+  const make=()=>api('/v1/intents','POST',{agentId:'agent_demo',beneficiary:'ai-data-api',amountMinor:250,asset:'USDC',purpose:'Local MVP smoke',idempotencyKey:randomUUID()});
+  const settle=id=>waitFor(async()=>{const i=await api(`/v1/intents/${id}`);return i.state==='settled'?i:null;});
+  const i=await make();
+  assert.equal(i.state,'authorized');
+  await new Promise(r=>setTimeout(r,2000));
+  assert.equal((await api(`/v1/intents/${i.id}`)).state,'authorized','Creation must not send before Execute');
+  await api(`/v1/intents/${i.id}/execute`,'POST');
+  const first=await settle(i.id);
+  assert.deepEqual(first.meshPath,['node-a','node-b','node-c']);assert.equal(first.receiptVerified,true);
+  console.log('PASS: explicit Execute → A --TCP--> B --libp2p--> C → verified receipt');
+  await network.stop('b',true);
+  await waitFor(async()=>!(await api('/v1/mesh/peers')).peers.find(p=>p.nodeId==='node-b').online);
+  const alternate=await make();await api(`/v1/intents/${alternate.id}/execute`,'POST');
+  const second=await settle(alternate.id);
+  assert.deepEqual(second.meshPath,['node-a','node-d','node-c']);assert.equal(second.receiptVerified,true);
+  console.log('PASS: node B crash → alternate A --libp2p--> D --TCP--> C');
+  await network.stop('c',true);
+  await waitFor(async()=>!(await network.api('d','/v1/mesh/peers')).peers.find(p=>p.nodeId==='node-c').online);
+  const queued=await make();await api(`/v1/intents/${queued.id}/execute`,'POST');
+  assert.equal((await api(`/v1/intents/${queued.id}`)).state,'queued_for_mesh');
+  await network.stop('a',true);await network.start('a');
+  assert.equal((await api(`/v1/intents/${queued.id}`)).state,'queued_for_mesh');
+  await network.start('c');const recovered=await settle(queued.id);assert.equal(recovered.receiptVerified,true);
+  await api(`/v1/intents/${queued.id}/execute`,'POST');
+  assert.equal((await network.api('c','/v1/transactions')).transactions.filter(t=>t.intentId===queued.id).length,1);
+  console.log('PASS: offline queue survives origin crash → C recovery → exactly one settlement');
+} finally {await network?.close();fs.rmSync(dir,{recursive:true,force:true});}

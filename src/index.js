@@ -5,7 +5,7 @@ import { SolanaDevnetAdapter } from './adapters/solana-devnet.js';
 import { validateRuntimeSecurity } from './runtime-security.js';
 
 const port = Number(process.env.PORT ?? 4044);
-const { apiKey, signingSecret } = validateRuntimeSecurity(process.env);
+const { apiKey, signingSecret } = validateRuntimeSecurity({ ...process.env, AIFP4_BIND_HOST: process.env.AIFP4_HTTP_BIND ?? '127.0.0.1' });
 
 const routes = [
   {
@@ -23,6 +23,9 @@ const routes = [
 const service = new MeshService({ routes, signingSecret, store: new IntentStore(process.env.AIFP4_DATA_FILE ?? '.data/mesh.json') });
 if (process.env.SOLANA_PAYER_SECRET_JSON) service.registerAdapter('solana-devnet', new SolanaDevnetAdapter(process.env.SOLANA_PAYER_SECRET_JSON));
 const server = createServer({ service, apiKey });
-server.listen(port, '0.0.0.0', () => {
+server.listen(port, process.env.AIFP4_HTTP_BIND ?? '127.0.0.1', () => {
   console.log(`AIFP-4 Mesh sandbox listening on http://127.0.0.1:${port}`);
 });
+
+function close() { server.close(() => process.exit(0)); server.closeIdleConnections(); }
+process.on('SIGINT', close); process.on('SIGTERM', close);

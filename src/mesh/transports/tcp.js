@@ -52,9 +52,9 @@ function attach(socket, receive, reject, reassembler) {
   socket.setTimeout(30000);
 }
 export class TcpTransport {
-  constructor(port, receive, {mtu=4096, fragmentFile=null}={}) {
+  constructor(port, receive, {mtu=4096, fragmentFile=null, bindHost='127.0.0.1'}={}) {
     if(!Number.isInteger(mtu) || mtu<256 || mtu>MAX_WIRE) throw new Error('INVALID_TCP_MTU');
-    this.id='tcp'; this.port=port; this.receive=receive; this.server=null; this.enabled=true; this.mtu=mtu;this.messageHandler=null;
+    this.bindHost=bindHost; this.id='tcp'; this.port=port; this.receive=receive; this.server=null; this.enabled=true; this.mtu=mtu;this.messageHandler=null;
     this.reassembler=new Reassembler(fragmentFile);
   }
   async start() {
@@ -71,7 +71,7 @@ export class TcpTransport {
         catch {socket.destroy();}
       },()=>socket.destroy(),this.reassembler);
     });
-    await new Promise((resolve,reject)=>{this.server.once('error',reject);this.server.listen(this.port,'0.0.0.0',resolve);});
+    await new Promise((resolve,reject)=>{this.server.once('error',reject);this.server.listen(this.port,this.bindHost,resolve);});
     this.port=this.server.address().port;
   }
   async stop() {if(this.server?.listening) await new Promise(resolve=>this.server.close(resolve)); this.server=null;}

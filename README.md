@@ -6,9 +6,27 @@ Implementation evidence and external blockers: [status matrix](docs/IMPLEMENTATI
 
 Payment forwarding now uses per-node SQLite bundles and hop records. TCP and libp2p `submit()` accept work locally; the receiving node verifies and durably records the full signed envelope before issuing a separate signed `HOP_ACCEPTED`. ACKs and settlement receipts can return over another route. Retries sign new hop messages while retaining the original payment identity; expired or uncertain settlements remain locked. Peer discovery still uses a synchronous control exchange. libp2p selectively resends missing fragments over a live Noise channel; TCP and disrupted links still retry whole envelopes. Outgoing fragment durability and asynchronous fragment ACK remain future work.
 
+## Local demo without Docker (recommended for recording)
+
+Use Node.js 24, then:
+
+```bash
+npm ci
+npm run ci
+npm run demo:smoke
+npm start
+```
+
+Wait for `READY`, open **http://127.0.0.1:4044/**, and enter the printed API key using **API key** in the dashboard. The launcher runs four independent processes A/B/C/D, persists their identities/history under `.data/local-demo`, and generates random local credentials in an untracked `.env` on first use. Only C can settle payments. Creating an intent does not dispatch it: press **Send through Mesh** explicitly. Statuses and topology refresh every three seconds.
+
+In the launch terminal use `stop b`, `start b`, `stop c`, `start c`, `status`, or `quit`. Stop B to demonstrate rerouting; stop C to demonstrate queueing and recovery. Mock settlement needs no Internet after dependency installation. `npm run demo:smoke` verifies these scenarios in an isolated temporary network, including origin crash/recovery and duplicate execution. `npm run sandbox` retains the original single-node sandbox.
+
+[Russian local setup and video script](docs/LOCAL_MVP_RU.md) · [release verification and limits](docs/MVP_VERIFICATION.md)
+
 ## Run the network
 
 ```bash
+npm run demo:configure
 docker compose up --build -d --wait
 ```
 
@@ -17,6 +35,8 @@ Open **http://127.0.0.1:4044/**. The dashboard proxies node A. Five independent 
 ```bash
 node scripts/compose-smoke.mjs
 ```
+
+The proof scripts load the generated credentials from `.env`; explicitly exported environment variables take precedence.
 
 The script proves A → B via TCP, B → C via libp2p, stops B, proves A → D via libp2p, D → C via TCP, then restarts B. It creates only mock USDC payments. See [the manual demo](docs/MESH_DEMO.md). `docker compose down` retains volumes; `docker compose down -v` removes all local identities and demo history.
 
@@ -50,11 +70,11 @@ Agent → policy → signed intent → signed Mesh envelope → weighted node/tr
 
 ## API example
 
-The local demo key is `sandbox-demo-key`. It is public and suitable only for the localhost mock demo. Use distinct random credentials for any shared sandbox.
+The launcher and Compose use the random API key generated in `.env`. Use the printed key for API calls. The standalone `npm run sandbox` can use the public localhost-only `sandbox-demo-key` when no key is supplied.
 
 ```bash
 curl -s -X POST http://127.0.0.1:4044/v1/intents \
-  -H 'content-type: application/json' -H 'x-aifp4-api-key: sandbox-demo-key' \
+  -H 'content-type: application/json' -H 'x-aifp4-api-key: YOUR_API_KEY' \
   -d '{"idempotencyKey":"demo-unique-001","agentId":"agent_demo","beneficiary":"ai-data-api","amountMinor":250,"asset":"USDC","purpose":"Dataset access"}'
 ```
 

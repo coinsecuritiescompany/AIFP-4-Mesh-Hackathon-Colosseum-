@@ -1,7 +1,8 @@
 FROM node:22-alpine
 
 ENV NODE_ENV=production \
-    PORT=4044
+    PORT=4044 \
+    AIFP4_HTTP_BIND=0.0.0.0
 WORKDIR /app
 
 COPY --chown=node:node package.json package-lock.json ./
